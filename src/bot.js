@@ -106,9 +106,11 @@ const client = new Client({
 });
 
 let BOT_GUILD = null;
+let CLIENT_READY = false;
 
 client.once("ready", async () => {
   console.log(`Bot logged in: ${client.user.tag}`);
+  CLIENT_READY = true;
   if (!config.guildId) {
     console.warn("config.guildId is missing!");
   }
@@ -357,6 +359,36 @@ function startPanelServer() {
     if (!secret || token === secret) return next();
     res.status(401).json({ error: "unauthorized" });
   };
+
+  app.get("/api/status", (req, res) => {
+    try {
+      const intentsObj = client.options?.intents;
+      const hasMembers = intentsObj?.has
+        ? intentsObj.has(GatewayIntentBits.GuildMembers)
+        : ((intentsObj & GatewayIntentBits.GuildMembers) !== 0);
+      const hasPresences = intentsObj?.has
+        ? intentsObj.has(GatewayIntentBits.GuildPresences)
+        : ((intentsObj & GatewayIntentBits.GuildPresences) !== 0);
+      const botReady = CLIENT_READY && !!client.user;
+      const guildConnected = !!BOT_GUILD;
+      const tokenPresent = !!process.env.DISCORD_TOKEN;
+      const panelAuthEnabled = !!secret;
+
+      res.json({
+        bot_logged_in: botReady,
+        guild_connected: guildConnected,
+        intents_ok: hasMembers && hasPresences,
+        token_present: tokenPresent,
+        panel_started: PANEL_STARTED,
+        panel_auth_enabled: panelAuthEnabled,
+        guild_id: config.guildId || null,
+        panel_port: Number(config.panelPort || 3000)
+      });
+    } catch (e) {
+      console.error("/api/status error:", e);
+      res.status(500).json({ error: "failed" });
+    }
+  });
 
   app.get("/", (req, res) => {
     res.sendFile(require("path").join(__dirname, "panel.html"));

@@ -29,6 +29,11 @@
     header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:22px; }
     header h1{ font-size:20px; font-weight:600; letter-spacing:.2px; margin:0; }
     header .sub{ color:var(--muted); font-size:13px; }
+    .status-banner{ display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    .status-badge{ display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; background:#0a1729; color:#cbd5e1; border:1px solid var(--border); font-size:12px; }
+    .dot{ width:8px; height:8px; border-radius:50%; background:var(--danger); }
+    .dot.ok{ background:var(--success); }
+    .dot.warn{ background:#f59e0b; }
     .card{
       background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:20px; box-shadow:0 10px 20px rgba(0,0,0,.30); margin-bottom:18px;
     }
@@ -175,8 +180,27 @@
       ['period','metric','limit'].forEach(id => {
         document.getElementById(id).addEventListener('change', ()=> updatePreview([]));
       });
+      refreshStatus();
+      setInterval(refreshStatus, 5000);
     }
     document.addEventListener('DOMContentLoaded', onReady);
+
+    async function refreshStatus(){
+      try{
+        const res = await fetch('/api/status');
+        if(!res.ok) return;
+        const s = await res.json();
+        const banner = document.getElementById('statusBanner');
+        const item = (label, ok) => `<span class="status-badge"><span class="dot ${ok ? 'ok' : ''}"></span>${label}</span>`;
+        banner.innerHTML = [
+          item('Bot Logged In', !!s.bot_logged_in),
+          item('Guild Connected', !!s.guild_connected),
+          item('Intents OK', !!s.intents_ok),
+          item('Token Present', !!s.token_present),
+          item('Panel Auth', !!s.panel_auth_enabled)
+        ].join(' ');
+      }catch{}
+    }
   </script>
 </head>
 <body>
@@ -185,6 +209,7 @@
       <div>
         <h1>Activity Bot — Panel</h1>
         <div class="sub">View daily/weekly/monthly rankings and send them as embeds.</div>
+        <div id="statusBanner" class="status-banner" aria-live="polite"></div>
       </div>
       
     </header>
