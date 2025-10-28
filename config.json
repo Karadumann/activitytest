@@ -1,0 +1,14 @@
+{
+  "guildId": "YOUR_GUILD_ID",
+  "controlChannelId": "CONTROL_CHANNEL_ID",
+  "adminRoleId": "ADMIN_ROLE_ID",
+  "watchRoleId": "WATCH_ROLE_ID",
+  "desiredStatusText": "Desired Status Keyword",
+  "checkIntervalMinutes": 5,
+  "reportChannelId": "REPORT_CHANNEL_ID",
+  "enableDailySummary": true,
+  "enableWeeklySummary": true,
+  "enableMonthlySummary": true,
+  "topNDefault": 10,
+  "panelPort": 3000
+}

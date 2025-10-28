@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Activity Bot — Panel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#0f1b2d;
+      --border:#1f2a44;
+      --text:#e5e7eb;
+      --muted:#9ca3af;
+      --accent:#3b82f6;
+      --accent-2:#60a5fa;
+      --danger:#ef4444;
+      --success:#10b981;
+    }
+    *{ box-sizing:border-box }
+    html, body{ height:100% }
+    body{
+      margin:0; background:linear-gradient(180deg, #0b1220 0%, #0c1424 100%);
+      color:var(--text); font-family:"Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    .container{ max-width:980px; margin:0 auto; padding:32px 20px; }
+    header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:22px; }
+    header h1{ font-size:20px; font-weight:600; letter-spacing:.2px; margin:0; }
+    header .sub{ color:var(--muted); font-size:13px; }
+    .card{
+      background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:20px; box-shadow:0 10px 20px rgba(0,0,0,.30); margin-bottom:18px;
+    }
+    .row{ display:flex; flex-wrap:wrap; gap:16px; align-items:center; margin-bottom:16px; }
+    .field{ display:flex; flex-direction:column; gap:6px; min-width:200px; }
+    label{ font-size:12px; color:var(--muted); }
+    select, input{ height:36px; padding:8px 12px; border-radius:12px; border:1px solid var(--border); background:#0b1628; color:var(--text); outline:none; transition: border-color .2s ease, box-shadow .2s ease; }
+    select:focus, input:focus{ border-color:var(--accent); box-shadow:0 0 0 3px rgba(59,130,246,.2); }
+    .actions{ display:flex; gap:12px; }
+    .btn{ height:36px; padding:0 14px; border-radius:12px; border:1px solid transparent; cursor:pointer; font-weight:600; letter-spacing:.2px; }
+    .btn-primary{ background:var(--accent); color:#fff; }
+    .btn-primary:hover{ background:var(--accent-2); }
+    .btn-secondary{ background:#0b1628; color:var(--text); border-color:var(--border); }
+    .btn-secondary:hover{ border-color:var(--accent); color:#fff; }
+    .table-wrap{ margin-top:14px; }
+    table{ width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px; }
+    thead th{ background:#0a1729; color:#cbd5e1; font-weight:600; font-size:13px; padding:10px 12px; border-bottom:1px solid var(--border); }
+    tbody td{ padding:10px 12px; border-bottom:1px solid var(--border); }
+    tbody tr:hover{ background:#0c1a2e; }
+    .badge{ display:inline-block; padding:2px 8px; border-radius:999px; background:#0a1729; color:#cbd5e1; border:1px solid var(--border); font-size:12px; }
+    .hr{ height:1px; background:var(--border); border:none; margin:16px 0; }
+    footer{ color:var(--muted); font-size:12px; margin-top:14px; }
+
+    
+    .modal{ position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; padding:20px; }
+    .modal.show{ display:flex; }
+    .modal-content{ background:var(--panel); border:1px solid var(--border); border-radius:16px; width:600px; max-width:100%; box-shadow:0 16px 32px rgba(0,0,0,.35); }
+    .modal-header{ padding:14px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+    .modal-title{ font-weight:600; }
+    .modal-body{ padding:10px 16px; max-height:50vh; overflow:auto; }
+    .modal-actions{ padding:12px 16px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:10px; }
+    .channel-item{ padding:10px 12px; border-radius:12px; border:1px solid var(--border); margin-bottom:8px; display:flex; align-items:center; justify-content:space-between; cursor:pointer; }
+    .channel-item:hover{ border-color:var(--accent); background:#0c1a2e; }
+    .search{ width:100%; margin-bottom:10px; }
+
+    
+    .embed-preview{ background:#0a1729; border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:14px; padding:12px; margin-top:16px; }
+    .embed-title{ color:#dbeafe; font-weight:600; margin-bottom:8px; }
+    .embed-desc{ white-space:pre-wrap; color:#e5e7eb; font-size:13px; line-height:1.5; }
+
+    
+    .toast-container{ position:fixed; bottom:16px; right:16px; display:flex; flex-direction:column; gap:8px; z-index:1000; }
+    .toast{ background:var(--panel); border:1px solid var(--border); border-left:4px solid var(--accent); color:var(--text); border-radius:12px; padding:10px 12px; box-shadow:0 8px 16px rgba(0,0,0,.35); font-size:13px; min-width:240px; }
+    .toast.success{ border-left-color:var(--success); }
+    .toast.error{ border-left-color:var(--danger); }
+    .toast.info{ border-left-color:var(--accent); }
+  </style>
+  <script>
+    function msToHours(ms){ return (ms/3600000).toFixed(2); }
+    function computeTitle(period, metric, limit){
+      const p = period === 'daily' ? 'Daily' : (period === 'weekly' ? 'Weekly' : 'Monthly');
+      const m = metric === 'online' ? 'Online' : 'Status';
+      return `${p} Top ${limit} (${m})`;
+    }
+    function showToast(type, message){
+      const c = document.getElementById('toastContainer');
+      const el = document.createElement('div');
+      el.className = `toast ${type}`;
+      el.textContent = message;
+      c.appendChild(el);
+      setTimeout(()=>{
+        el.style.opacity = '0';
+        el.style.transition = 'opacity .4s ease';
+        setTimeout(()=> c.removeChild(el), 400);
+      }, 3500);
+    }
+    function updatePreview(data){
+      const period = document.getElementById('period').value;
+      const metric = document.getElementById('metric').value;
+      const limit = document.getElementById('limit').value;
+      const title = computeTitle(period, metric, limit);
+      const lines = (data || []).map((r, i) => `#${i+1} ${r.name} — Online: ${msToHours(r.online_ms)}h, Status: ${msToHours(r.status_ms)}h`);
+      document.getElementById('previewTitle').textContent = title;
+      document.getElementById('previewDesc').textContent = lines.length ? lines.join('\n') : '(no data)';
+    }
+    async function fetchRank(){
+      const period = document.getElementById('period').value;
+      const metric = document.getElementById('metric').value;
+      const limit = document.getElementById('limit').value;
+      const token = document.getElementById('token').value;
+      const res = await fetch(`/api/rank?period=${period}&metric=${metric}&limit=${limit}`, {
+        headers: token ? { 'X-Panel-Token': token } : {}
+      });
+      if(!res.ok){ showToast('error','Failed to load rankings'); return; }
+      const data = await res.json();
+      const tbody = document.querySelector('#table tbody');
+      tbody.innerHTML = '';
+      data.forEach((r, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${i+1}</td><td>${r.name}</td><td>${msToHours(r.online_ms)}</td><td>${msToHours(r.status_ms)}</td>`;
+        tbody.appendChild(tr);
+      });
+      updatePreview(data);
+      showToast('success',`Loaded ${data.length} items`);
+    }
+    async function openChannelPicker(){
+      const token = document.getElementById('token').value;
+      const res = await fetch('/api/channels', { headers: token ? { 'X-Panel-Token': token } : {} });
+      if(!res.ok){ showToast('error','Failed to load channels'); return; }
+      const channels = await res.json();
+      const modal = document.getElementById('modal');
+      const list = document.getElementById('channelList');
+      const search = document.getElementById('channelSearch');
+      list.innerHTML = '';
+      search.value = '';
+      const render = (items)=>{
+        list.innerHTML = '';
+        items.forEach(ch => {
+          const el = document.createElement('div');
+          el.className = 'channel-item';
+          el.innerHTML = `<span># ${ch.name}</span><button class="btn btn-primary">Select</button>`;
+          el.querySelector('button').addEventListener('click', ()=> sendEmbedToChannel(ch.id));
+          list.appendChild(el);
+        });
+      };
+      render(channels);
+      search.oninput = () => {
+        const q = search.value.toLowerCase();
+        render(channels.filter(c => c.name.toLowerCase().includes(q)));
+      };
+      modal.classList.add('show');
+      showToast('info',`Loaded ${channels.length} channels`);
+    }
+    async function sendEmbedToChannel(channelId){
+      const period = document.getElementById('period').value;
+      const metric = document.getElementById('metric').value;
+      const limit = document.getElementById('limit').value;
+      const token = document.getElementById('token').value;
+      showToast('info','Sending embed...');
+      const res = await fetch('/api/send_rank_embed', {
+        method: 'POST', headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'X-Panel-Token': token } : {})
+        }, body: JSON.stringify({ period, metric, limit, channel_id: channelId })
+      });
+      const modal = document.getElementById('modal');
+      modal.classList.remove('show');
+      if (res.ok) showToast('success','Embed sent to Discord'); else showToast('error','Send failed');
+    }
+    function onReady(){
+      document.getElementById('fetchBtn').addEventListener('click', fetchRank);
+      document.getElementById('sendBtn').addEventListener('click', openChannelPicker);
+      document.getElementById('modalClose').addEventListener('click', ()=> document.getElementById('modal').classList.remove('show'));
+      ['period','metric','limit'].forEach(id => {
+        document.getElementById(id).addEventListener('change', ()=> updatePreview([]));
+      });
+    }
+    document.addEventListener('DOMContentLoaded', onReady);
+  </script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Activity Bot — Panel</h1>
+        <div class="sub">View daily/weekly/monthly rankings and send them as embeds.</div>
+      </div>
+      
+    </header>
+
+    <section class="card">
+      <div class="row">
+        <div class="field">
+          <label>Period</label>
+          <select id="period">
+            <option value="daily">Daily</option>
+            <option value="weekly" selected>Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Metric</label>
+          <select id="metric">
+            <option value="status" selected>Desired Status Duration</option>
+            <option value="online">Online Duration</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Top N</label>
+          <input id="limit" type="number" min="1" max="50" value="10" />
+        </div>
+        <div class="field" style="flex:1; min-width:240px;">
+          <label>Token (optional)</label>
+          <input id="token" type="password" placeholder="PANEL_SECRET" />
+        </div>
+      </div>
+      <div class="actions">
+        <button id="fetchBtn" class="btn btn-secondary">Load Rankings</button>
+        <button id="sendBtn" class="btn btn-primary">Send Embed to Discord</button>
+      </div>
+      <div class="hr"></div>
+      <div class="embed-preview" aria-label="Embed preview">
+        <div id="previewTitle" class="embed-title">Preview</div>
+        <div id="previewDesc" class="embed-desc">Use "Load Rankings" to generate the preview.</div>
+      </div>
+      <div class="table-wrap">
+        <table id="table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>User</th>
+              <th>Online (hours)</th>
+              <th>Status (hours)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+        <div class="modal-title">Slash Commands</div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <div>
+          <label style="display:block; margin-bottom:6px;">For Everyone</label>
+          <div class="badge">/mytime</div>
+          <div class="sub">Shows your online totals for today/this week/this month. Replies only to you.</div>
+        </div>
+        <div class="hr"></div>
+        <div>
+          <label style="display:block; margin-bottom:6px;">Admins</label>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <div>
+              <div class="badge">/overview</div>
+              <div class="sub">Monitoring overview: monitored count, currently online, non-compliant list. Requires admin role and control channel.</div>
+            </div>
+            <div>
+              <div class="badge">/status user:@mention</div>
+              <div class="sub">Member snapshot: online state, custom status, desired status compliance. Requires admin role and control channel.</div>
+            </div>
+            <div>
+              <div class="badge">/report user:@mention [period]</div>
+              <div class="sub">Daily/weekly/monthly totals and first 20 sessions. Period choices: <code>daily</code>, <code>weekly</code>, <code>monthly</code>. Requires admin role and control channel.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <div class="modal" id="modal" aria-hidden="true">
+      <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-header">
+          <div class="modal-title" id="modalTitle">Select a Channel</div>
+          <button id="modalClose" class="btn btn-secondary">Close</button>
+        </div>
+        <div class="modal-body">
+          <input id="channelSearch" class="search" type="text" placeholder="Search channels..." />
+          <div id="channelList"></div>
+        </div>
+        <div class="modal-actions">
+          <span class="sub">Pick a channel to send the embed.</span>
+        </div>
+      </div>
+    </div>
+
+
+  </div>
+  <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>
