@@ -1,3 +1,5 @@
+<img width="1472" height="945" alt="image" src="https://github.com/user-attachments/assets/fa137869-d32d-4c12-9356-a6ed5c6b4f1e" />
+
 # Discord Activity Monitor Bot
 
 A Discord bot that tracks online presence and custom status for members with a specific role, aggregates daily/weekly/monthly totals, and provides a lightweight web panel for ranking and reporting.
