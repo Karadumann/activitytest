@@ -34,6 +34,9 @@
     .dot{ width:8px; height:8px; border-radius:50%; background:var(--danger); }
     .dot.ok{ background:var(--success); }
     .dot.warn{ background:#f59e0b; }
+    .status-info{ margin-top:6px; color:var(--muted); font-size:12px; }
+    .spinner{ width:14px; height:14px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; display:inline-block; animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .card{
       background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:20px; box-shadow:0 10px 20px rgba(0,0,0,.30); margin-bottom:18px;
     }
@@ -100,6 +103,22 @@
         setTimeout(()=> c.removeChild(el), 400);
       }, 3500);
     }
+    const T = {
+      hints: {
+        bot: { ok: 'Bot session active', bad: 'Not logged in — check DISCORD_TOKEN' },
+        guild: { ok: 'Guild cache loaded', bad: 'Check config.guildId & bot invite' },
+        intents: { ok: 'Members & Presences enabled', bad: 'Enable GuildMembers & Presences' },
+        token: { ok: 'DISCORD_TOKEN set', bad: 'Set DISCORD_TOKEN in .env' },
+        auth: { ok: 'PANEL_SECRET required', bad: 'No PANEL_SECRET — public panel' }
+      },
+      labels: {
+        guild: 'Guild',
+        port: 'Port',
+        reconnecting: 'Reconnecting...',
+        reconnect_ok: 'Reconnect requested',
+        reconnect_failed: 'Reconnect failed'
+      }
+    };
     function updatePreview(data){
       const period = document.getElementById('period').value;
       const metric = document.getElementById('metric').value;
@@ -109,6 +128,7 @@
       document.getElementById('previewTitle').textContent = title;
       document.getElementById('previewDesc').textContent = lines.length ? lines.join('\n') : '(no data)';
     }
+    let reconnectInProgress = false;
     async function fetchRank(){
       const period = document.getElementById('period').value;
       const metric = document.getElementById('metric').value;
@@ -182,6 +202,8 @@
       });
       refreshStatus();
       setInterval(refreshStatus, 5000);
+      const rb = document.getElementById('reconnectBtn');
+      if (rb) rb.addEventListener('click', reconnectBot);
     }
     document.addEventListener('DOMContentLoaded', onReady);
 
@@ -190,16 +212,79 @@
         const res = await fetch('/api/status');
         if(!res.ok) return;
         const s = await res.json();
-        const banner = document.getElementById('statusBanner');
-        const item = (label, ok) => `<span class="status-badge"><span class="dot ${ok ? 'ok' : ''}"></span>${label}</span>`;
-        banner.innerHTML = [
-          item('Bot Logged In', !!s.bot_logged_in),
-          item('Guild Connected', !!s.guild_connected),
-          item('Intents OK', !!s.intents_ok),
-          item('Token Present', !!s.token_present),
-          item('Panel Auth', !!s.panel_auth_enabled)
-        ].join(' ');
+        renderStatus(s);
       }catch{}
+    }
+
+    function renderStatus(s){
+      const banner = document.getElementById('statusBanner');
+      const item = (label, ok, hint) => `<span class="status-badge" title="${hint}"><span class="dot ${ok ? 'ok' : ''}"></span>${label}</span>`;
+      banner.innerHTML = [
+        item('Bot Logged In', !!s.bot_logged_in, s.bot_logged_in ? 'Bot session active' : 'Not logged in — check DISCORD_TOKEN'),
+        item('Guild Connected', !!s.guild_connected, s.guild_connected ? 'Guild cache loaded' : 'Check config.guildId & bot invite'),
+        item('Intents OK', !!s.intents_ok, s.intents_ok ? 'Members & Presences enabled' : 'Enable GuildMembers & Presences'),
+        item('Token Present', !!s.token_present, s.token_present ? 'DISCORD_TOKEN set' : 'Set DISCORD_TOKEN in .env'),
+        item('Panel Auth', !!s.panel_auth_enabled, s.panel_auth_enabled ? 'PANEL_SECRET required' : 'No PANEL_SECRET — public panel')
+      ].join(' ');
+
+      const info = document.getElementById('statusInfo');
+      if (info) info.innerHTML = `<span class="badge">${T.labels.guild}: ${s.guild_id || '-'}</span> <span class="badge">${T.labels.port}: ${s.panel_port || '-'}</span>`;
+
+      const rb = document.getElementById('reconnectBtn');
+      if (rb) {
+        rb.style.display = (s.token_present && !s.bot_logged_in) ? 'inline-block' : 'none';
+        if (!reconnectInProgress) rb.textContent = 'Reconnect Bot';
+        rb.disabled = reconnectInProgress;
+      }
+    }
+
+    async function reconnectBot(){
+      try{
+        const token = document.getElementById('token').value;
+        reconnectInProgress = true;
+        const rb = document.getElementById('reconnectBtn');
+        if (rb) { rb.disabled = true; rb.innerHTML = `<span class="spinner"></span>Reconnecting...`; }
+        showToast('info', 'Reconnecting...');
+        const res = await fetch('/api/reconnect', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'X-Panel-Token': token } : {})
+          }
+        });
+        if(res.ok){
+          showToast('success', 'Reconnect requested');
+          await waitForReady();
+        } else {
+          showToast('error', 'Reconnect failed');
+          reconnectInProgress = false;
+          if (rb) { rb.disabled = false; rb.textContent = 'Reconnect Bot'; }
+          await refreshStatus();
+        }
+      }catch{}
+    }
+
+    async function waitForReady(maxTries = 10){
+      for(let i=0;i<maxTries;i++){
+        await new Promise(r=>setTimeout(r,800));
+        try{
+          const res = await fetch('/api/status');
+          if(!res.ok) continue;
+          const s = await res.json();
+          renderStatus(s);
+          if(s.bot_logged_in){
+            reconnectInProgress = false;
+            const rb = document.getElementById('reconnectBtn');
+            if (rb) { rb.disabled = false; rb.textContent = 'Reconnect Bot'; }
+            showToast('success', 'Bot reconnected');
+            return;
+          }
+        }catch{}
+      }
+      reconnectInProgress = false;
+      const rb = document.getElementById('reconnectBtn');
+      if (rb) { rb.disabled = false; rb.textContent = 'Reconnect Bot'; }
+      showToast('error', 'Bot did not become ready');
     }
   </script>
 </head>
@@ -210,6 +295,10 @@
         <h1>Activity Bot — Panel</h1>
         <div class="sub">View daily/weekly/monthly rankings and send them as embeds.</div>
         <div id="statusBanner" class="status-banner" aria-live="polite"></div>
+        <div id="statusInfo" class="status-info"></div>
+        <div class="actions" style="margin-top:8px;">
+          <button id="reconnectBtn" class="btn btn-secondary" style="display:none;">Reconnect Bot</button>
+        </div>
       </div>
       
     </header>

@@ -435,6 +435,21 @@ function startPanelServer() {
     }
   });
 
+  app.post("/api/reconnect", requireAuth, async (req, res) => {
+    try {
+      const token = process.env.DISCORD_TOKEN || "";
+      if (!token) return res.status(400).json({ error: "no_token" });
+      try { await client.destroy(); } catch {}
+      CLIENT_READY = false;
+      BOT_GUILD = null;
+      await client.login(token);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("Reconnect error:", e);
+      res.status(500).json({ error: "failed" });
+    }
+  });
+
   app.get("/api/channels", requireAuth, async (req, res) => {
     const guild = BOT_GUILD;
     if (!guild) return res.status(503).json({ error: "bot_not_ready" });
