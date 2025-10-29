@@ -85,10 +85,18 @@
     .toast.info{ border-left-color:var(--accent); }
   </style>
   <script>
-    function msToHours(ms){ return (ms/3600000).toFixed(2); }
+    function formatHMS(ms){
+      if (!Number.isFinite(ms) || ms <= 0) return '00:00:00';
+      const totalSeconds = Math.floor(ms / 1000);
+      const h = Math.floor(totalSeconds / 3600);
+      const m = Math.floor((totalSeconds % 3600) / 60);
+      const s = totalSeconds % 60;
+      const pad = (n)=>String(n).padStart(2,'0');
+      return `${pad(h)}:${pad(m)}:${pad(s)}`;
+    }
     function computeTitle(period, metric, limit){
       const p = period === 'daily' ? 'Daily' : (period === 'weekly' ? 'Weekly' : 'Monthly');
-      const m = metric === 'online' ? 'Online' : 'Status';
+      const m = metric === 'online' ? 'Online' : (metric === 'desired_online' ? 'Desired Online' : 'Status');
       return `${p} Top ${limit} (${m})`;
     }
     function showToast(type, message){
@@ -124,7 +132,7 @@
       const metric = document.getElementById('metric').value;
       const limit = document.getElementById('limit').value;
       const title = computeTitle(period, metric, limit);
-      const lines = (data || []).map((r, i) => `#${i+1} ${r.name} — Online: ${msToHours(r.online_ms)}h, Status: ${msToHours(r.status_ms)}h`);
+      const lines = (data || []).map((r, i) => `#${i+1} ${r.name} — Online w/ Status: ${formatHMS(r.desired_online_ms ?? r.online_ms)}, Online w/o Status: ${formatHMS(r.online_without_status_ms ?? 0)}`);
       document.getElementById('previewTitle').textContent = title;
       document.getElementById('previewDesc').textContent = lines.length ? lines.join('\n') : '(no data)';
     }
@@ -143,7 +151,7 @@
       tbody.innerHTML = '';
       data.forEach((r, i) => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${i+1}</td><td>${r.name}</td><td>${msToHours(r.online_ms)}</td><td>${msToHours(r.status_ms)}</td>`;
+        tr.innerHTML = `<td>${i+1}</td><td>${r.name}</td><td>${formatHMS(r.desired_online_ms ?? r.online_ms)}</td><td>${formatHMS(r.online_without_status_ms ?? 0)}</td>`;
         tbody.appendChild(tr);
       });
       updatePreview(data);
@@ -200,6 +208,24 @@
       ['period','metric','limit'].forEach(id => {
         document.getElementById(id).addEventListener('change', ()=> updatePreview([]));
       });
+      const tokenInput = document.getElementById('token');
+      const rememberBox = document.getElementById('rememberToken');
+      if (tokenInput && rememberBox) {
+        const rememberStored = localStorage.getItem('panel_token_remember');
+        const remember = rememberStored ? rememberStored === '1' : true; // default ON
+        if (!rememberStored) localStorage.setItem('panel_token_remember', '1');
+        rememberBox.checked = remember;
+        const saved = localStorage.getItem('panel_token') || '';
+        tokenInput.value = remember ? saved : '';
+        rememberBox.addEventListener('change', (e) => {
+          const checked = e.target.checked;
+          localStorage.setItem('panel_token_remember', checked ? '1' : '0');
+          if (!checked) localStorage.removeItem('panel_token');
+        });
+        tokenInput.addEventListener('input', (e) => {
+          if (rememberBox.checked) localStorage.setItem('panel_token', e.target.value);
+        });
+      }
       refreshStatus();
       setInterval(refreshStatus, 5000);
       const rb = document.getElementById('reconnectBtn');
@@ -318,6 +344,7 @@
           <select id="metric">
             <option value="status" selected>Desired Status Duration</option>
             <option value="online">Online Duration</option>
+            <option value="desired_online">Desired Online Duration</option>
           </select>
         </div>
         <div class="field">
@@ -327,6 +354,10 @@
         <div class="field" style="flex:1; min-width:240px;">
           <label>Token (optional)</label>
           <input id="token" type="password" placeholder="PANEL_SECRET" />
+          <label style="display:flex; align-items:center; gap:6px; margin-top:6px;">
+            <input id="rememberToken" type="checkbox" checked />
+            <span>Remember token</span>
+          </label>
         </div>
       </div>
       <div class="actions">
@@ -344,8 +375,8 @@
             <tr>
               <th>#</th>
               <th>User</th>
-              <th>Online (hours)</th>
-              <th>Status (hours)</th>
+              <th>Online w/ Status (h:m:s)</th>
+              <th>Online w/o Status (h:m:s)</th>
             </tr>
           </thead>
           <tbody></tbody>

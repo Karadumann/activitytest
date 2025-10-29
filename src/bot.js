@@ -59,6 +59,27 @@ const isoWeekLabel = (d = new Date()) => {
 };
 const monthLabel = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
+function sumIntersection(sessionsA, sessionsB, startMs, endMs) {
+  try {
+    const norm = (s) => (s || []).map(x => ({
+      start: Math.max(startMs, x.start_ts),
+      end: Math.min(endMs, x.end_ts ?? Date.now())
+    })).filter(x => x.end >= x.start);
+    const a = norm(sessionsA);
+    const b = norm(sessionsB);
+    let i = 0, j = 0, total = 0;
+    while (i < a.length && j < b.length) {
+      const start = Math.max(a[i].start, b[j].start);
+      const end = Math.min(a[i].end, b[j].end);
+      if (end >= start) total += (end - start);
+      if (a[i].end < b[j].end) i++; else j++;
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
 const isWatchedMember = (member) => member?.roles?.cache?.has(config.watchRoleId);
 const getPresence = (member) => member?.presence || null;
 const getCustomStatusText = (presence) => {
@@ -66,7 +87,7 @@ const getCustomStatusText = (presence) => {
   const custom = presence.activities?.find((a) => a.type === ActivityType.Custom);
   return custom?.state || null;
 };
-const isOnlineStatus = (presence) => presence?.status === "online";
+const isOnlineStatus = (presence) => ["online", "idle", "dnd"].includes(presence?.status);
 const hasDesiredStatus = (text) => {
   if (!text) return false;
   const want = (config.desiredStatusText || "").trim().toLowerCase();
@@ -108,6 +129,64 @@ const client = new Client({
 let BOT_GUILD = null;
 let CLIENT_READY = false;
 
+const I18N = {
+  "en-US": {
+    title_daily: "Daily Top {n} ({metric})",
+    title_weekly: "Weekly Top {n} ({metric})",
+    title_monthly: "Monthly Top {n} ({metric})",
+    metric_online: "Online",
+    metric_status: "Status",
+    metric_split: "Online Split",
+    with_status: "w/ Status",
+    without_status: "w/o Status",
+    no_data_period: "No {period} data available yet.",
+    period_daily: "daily",
+    period_weekly: "weekly",
+    period_monthly: "monthly",
+    member_not_found: "Member not found.",
+    today: "Today",
+    this_week: "This Week",
+    this_month: "This Month",
+    guild_footer_prefix: "Guild",
+    user_label: "User",
+  },
+  "tr": {
+    title_daily: "Günlük Top {n} ({metric})",
+    title_weekly: "Haftalık Top {n} ({metric})",
+    title_monthly: "Aylık Top {n} ({metric})",
+    metric_online: "Çevrimiçi",
+    metric_status: "Durum",
+    metric_split: "Online Ayrımı",
+    with_status: "Durumlu",
+    without_status: "Durumsuz",
+    no_data_period: "{period} verisi henüz yok.",
+    period_daily: "Günlük",
+    period_weekly: "Haftalık",
+    period_monthly: "Aylık",
+    member_not_found: "Üye bulunamadı.",
+    today: "Bugün",
+    this_week: "Bu Hafta",
+    this_month: "Bu Ay",
+    guild_footer_prefix: "Sunucu",
+    user_label: "Kullanıcı",
+  },
+};
+
+const pickLocale = (interactionOrGuild) => {
+  try {
+    const loc = interactionOrGuild?.locale || interactionOrGuild?.preferredLocale || "en-US";
+    return I18N[loc] ? loc : "en-US";
+  } catch {
+    return "en-US";
+  }
+};
+
+const fmtTitle = (L, period, limit, metricLabel) => {
+  if (period === "daily") return L.title_daily.replace("{n}", String(limit)).replace("{metric}", metricLabel);
+  if (period === "weekly") return L.title_weekly.replace("{n}", String(limit)).replace("{metric}", metricLabel);
+  return L.title_monthly.replace("{n}", String(limit)).replace("{metric}", metricLabel);
+};
+
 client.once("ready", async () => {
   console.log(`Bot logged in: ${client.user.tag}`);
   CLIENT_READY = true;
@@ -120,51 +199,98 @@ client.once("ready", async () => {
     BOT_GUILD = guild;
     await guild.members.fetch();
 
-    const commands = [
-      {
-        name: "overview",
-        description: "Show overall monitoring summary"
-      },
-      {
-        name: "status",
-        description: "Show a member's current presence and custom status",
-        options: [
-          {
-            name: "user",
-            description: "Target user",
-            type: 6,
-            required: true
-          }
-        ]
-      },
-      {
-        name: "report",
-        description: "Report a member's online/status totals by period",
-        options: [
-          {
-            name: "user",
-            description: "Target user",
-            type: 6,
-            required: true
-          },
-          {
-            name: "period",
-            description: "Time range",
-            type: 3,
-            required: false,
-            choices: [
-              { name: "daily", value: "daily" },
-              { name: "weekly", value: "weekly" },
-              { name: "monthly", value: "monthly" }
-            ]
-          }
-        ]
-      },
-      {
-        name: "mytime",
-        description: "Show your own online totals (ephemeral)"
-      }
-    ];
+      const commands = [
+        {
+          name: "overview",
+          name_localizations: { "tr": "genel-bakis", "en-US": "overview" },
+          description: "Show overall monitoring summary",
+          description_localizations: { "tr": "Genel izleme özetini göster" }
+        },
+        {
+          name: "status",
+          name_localizations: { "tr": "durum", "en-US": "status" },
+          description: "Show a member's current presence and custom status",
+          description_localizations: { "tr": "Bir üyenin mevcut varlığını ve özel durum metnini göster" },
+          options: [
+            {
+              name: "user",
+              name_localizations: { "tr": "kullanici" },
+              description: "Target user",
+              description_localizations: { "tr": "Hedef kullanıcı" },
+              type: 6,
+              required: true
+            }
+          ]
+        },
+        {
+          name: "report",
+          name_localizations: { "tr": "rapor", "en-US": "report" },
+          description: "Report a member's online/status totals by period",
+          description_localizations: { "tr": "Bir üyenin dönem bazında çevrimiçi/durum toplamlarını göster" },
+          options: [
+            {
+              name: "user",
+              name_localizations: { "tr": "kullanici" },
+              description: "Target user",
+              description_localizations: { "tr": "Hedef kullanıcı" },
+              type: 6,
+              required: true
+            },
+            {
+              name: "period",
+              name_localizations: { "tr": "donem" },
+              description: "Time range",
+              description_localizations: { "tr": "Zaman aralığı" },
+              type: 3,
+              required: false,
+              choices: [
+                { name: "daily", name_localizations: { "tr": "Günlük" }, value: "daily" },
+                { name: "weekly", name_localizations: { "tr": "Haftalık" }, value: "weekly" },
+                { name: "monthly", name_localizations: { "tr": "Aylık" }, value: "monthly" }
+              ]
+            }
+          ]
+        },
+        {
+          name: "mytime",
+          name_localizations: { "tr": "benim-surem", "en-US": "mytime" },
+          description: "Show your own online totals (ephemeral)",
+          description_localizations: { "tr": "Kendi çevrimiçi toplamlarını göster (yalnızca sana görünür)" }
+        },
+        {
+          name: "leader",
+          name_localizations: { "tr": "lider", "en-US": "leader" },
+          description: "Show Top 15 leaderboard",
+          description_localizations: { "tr": "İlk 15 lider tablosunu göster" },
+          options: [
+            {
+              name: "period",
+              name_localizations: { "tr": "donem" },
+              description: "Time range",
+              description_localizations: { "tr": "Zaman aralığı" },
+              type: 3,
+              required: false,
+              choices: [
+                { name: "daily", name_localizations: { "tr": "Günlük" }, value: "daily" },
+                { name: "weekly", name_localizations: { "tr": "Haftalık" }, value: "weekly" },
+                { name: "monthly", name_localizations: { "tr": "Aylık" }, value: "monthly" }
+              ]
+            },
+            {
+              name: "metric",
+              name_localizations: { "tr": "metrik" },
+              description: "Sort metric",
+              description_localizations: { "tr": "Sıralama metriği" },
+              type: 3,
+              required: false,
+              choices: [
+                { name: "Online", name_localizations: { "tr": "Çevrimiçi Toplam" }, value: "online" },
+                { name: "Online w/ Status", name_localizations: { "tr": "Durumlu Çevrimiçi" }, value: "desired_online" }
+              ]
+            }
+          ]
+        }
+      ];
     await client.application.commands.set(commands, config.guildId);
     console.log("Slash commands registered.");
 
@@ -294,37 +420,139 @@ async function sendRankEmbed(guild, period, metric, limit, channelIdOverride) {
     return;
   }
   const guildId = guild.id;
-  let rows = [];
   let title = "";
   const now = new Date();
-  if (period === "daily") {
-    const dateDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    rows = getTopDaily(guildId, dateDay, metric, limit);
-    title = `Daily Top ${limit} (${metric === 'online' ? 'Online' : 'Status'})`;
-  } else if (period === "weekly") {
-    const label = isoWeekLabel(now);
-    rows = getTopWeekly(guildId, label, metric, limit);
-    title = `Weekly Top ${limit} (${metric === 'online' ? 'Online' : 'Status'})`;
-  } else {
-    const label = monthLabel(now);
-    rows = getTopMonthly(guildId, label, metric, limit);
-    title = `Monthly Top ${limit} (${metric === 'online' ? 'Online' : 'Status'})`;
-  }
-  if (!rows.length) {
-    await channel.send({ content: `No ${period} data available yet.` });
+  if (metric !== 'desired_online') {
+    let rows = [];
+    if (period === "daily") {
+      const dateDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      rows = getTopDaily(guildId, dateDay, metric, limit);
+      title = `Daily Top ${limit} (${metric === 'online' ? 'Online' : 'Status'})`;
+      // Fallback for today: compute on the fly if aggregates empty
+      if (!rows || rows.length === 0) {
+        await guild.members.fetch();
+        const startMs = startOfDay(now), endMs = endOfDay(now);
+        const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+        const computed = await Promise.all(watchers.map(async (m) => {
+          try {
+            const onlineSessions = getOnlineSessionsBetween(m.id, startMs, endMs);
+            const statusSessions = getStatusSessionsBetween(m.id, startMs, endMs);
+            const onlineMs = sumOverlap(onlineSessions, startMs, endMs);
+            const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+            const onlineWithoutStatusMs = Math.max(0, onlineMs - desiredOnlineMs);
+            return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: desiredOnlineMs, online_without_status_ms: onlineWithoutStatusMs };
+          } catch {
+            return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: 0, online_without_status_ms: 0 };
+          }
+        }));
+        // Sort by selected metric: if 'online' use total online (desired + without), if 'status' use desired_online
+        computed.sort((a, b) => (metric === 'online'
+          ? (b.desired_online_ms + b.online_without_status_ms) - (a.desired_online_ms + a.online_without_status_ms)
+          : (b.desired_online_ms - a.desired_online_ms))
+        );
+        const top = computed.slice(0, limit);
+        const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
+        const rankLabel = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
+        const fields = top.map((r, i) => ({
+          name: `${rankLabel(i)} ${r.name}`,
+          value: `🟢 w/ Status: ${formatDuration(r.desired_online_ms)} • ⚪ w/o Status: ${formatDuration(r.online_without_status_ms)}`,
+          inline: true
+        }));
+        const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
+        const embed = new EmbedBuilder()
+          .setColor(0x10b981)
+          .setTitle(title)
+          .setAuthor({ name: guild.name, iconURL: icon || undefined })
+          .setFooter({ text: `Guild: ${guild.name} • ${rangeStr}` })
+          .setTimestamp(now)
+          .addFields(fields);
+        if (icon) embed.setThumbnail(icon);
+        await channel.send({ embeds: [embed] });
+        return;
+      }
+    } else if (period === "weekly") {
+      const label = isoWeekLabel(now);
+      rows = getTopWeekly(guildId, label, metric, limit);
+      title = `Weekly Top ${limit} (${metric === 'online' ? 'Online' : 'Status'})`;
+    } else {
+      const label = monthLabel(now);
+      rows = getTopMonthly(guildId, label, metric, limit);
+      title = `Monthly Top ${limit} (${metric === 'online' ? 'Online' : 'Status'})`;
+    }
+    if (!rows.length) {
+      await channel.send({ content: `No ${period} data available yet.` });
+      return;
+    }
+    let startMs, endMs;
+    if (period === "daily") { startMs = startOfDay(now); endMs = endOfDay(now); }
+    else if (period === "weekly") { startMs = startOfWeek(now); endMs = endOfWeek(now); }
+    else { startMs = startOfMonth(now); endMs = endOfMonth(now); }
+    const topFields = await Promise.all(rows.map(async (r, i) => {
+      const m = await guild.members.fetch(r.user_id).catch(() => null);
+      const name = m ? (m.displayName || m.user.username) : r.user_id;
+      const onlineSessions = getOnlineSessionsBetween(r.user_id, startMs, endMs);
+      const statusSessions = getStatusSessionsBetween(r.user_id, startMs, endMs);
+      const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+      const onlineTotalMs = r.online_ms || sumOverlap(onlineSessions, startMs, endMs);
+      const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
+      const rankLabel = (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
+      return {
+        name: `${rankLabel} ${name}`,
+        value: `🟢 w/ Status: ${formatDuration(desiredOnlineMs)} • ⚪ w/o Status: ${formatDuration(onlineWithoutStatusMs)}`,
+        inline: true
+      };
+    }));
+    const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
+    const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
+    const embed = new EmbedBuilder()
+      .setColor(0x10b981)
+      .setTitle(title)
+      .setAuthor({ name: guild.name, iconURL: icon || undefined })
+      .setFooter({ text: `Guild: ${guild.name} • ${rangeStr}` })
+      .setTimestamp(now)
+      .addFields(topFields);
+    if (icon) embed.setThumbnail(icon);
+    await channel.send({ embeds: [embed] });
     return;
   }
-  const list = await Promise.all(rows.map(async (r, i) => {
-    const m = await guild.members.fetch(r.user_id).catch(() => null);
-    const name = m ? (m.displayName || m.user.username) : r.user_id;
-    const onlineH = msToHours(r.online_ms);
-    const statusH = msToHours(r.status_ms);
-    return `#${i + 1} ${name} — Online: ${onlineH}h, Status: ${statusH}h`;
+
+  await guild.members.fetch();
+  let startMs, endMs;
+  const Lguild = I18N[pickLocale(guild)];
+  if (period === "daily") { startMs = startOfDay(now); endMs = endOfDay(now); title = fmtTitle(Lguild, "daily", limit, Lguild.metric_split); }
+  else if (period === "weekly") { startMs = startOfWeek(now); endMs = endOfWeek(now); title = fmtTitle(Lguild, "weekly", limit, Lguild.metric_split); }
+  else { startMs = startOfMonth(now); endMs = endOfMonth(now); title = fmtTitle(Lguild, "monthly", limit, Lguild.metric_split); }
+  const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+  const rows = await Promise.all(watchers.map(async (m) => {
+    try {
+      const onlineSessions = getOnlineSessionsBetween(m.id, startMs, endMs);
+      const statusSessions = getStatusSessionsBetween(m.id, startMs, endMs);
+      const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+      const onlineTotalMs = sumOverlap(onlineSessions, startMs, endMs);
+      const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
+      return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: desiredOnlineMs, online_without_status_ms: onlineWithoutStatusMs };
+    } catch {
+      return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: 0, online_without_status_ms: 0 };
+    }
+  }));
+  rows.sort((a, b) => b.desired_online_ms - a.desired_online_ms);
+  const top = rows.slice(0, limit);
+  const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
+  const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
+  const rankLabel = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
+  const fields = top.map((r, i) => ({
+    name: `${rankLabel(i)} ${r.name}`,
+    value: `🟢 ${Lguild.with_status}: ${formatDuration(r.desired_online_ms)} • ⚪ ${Lguild.without_status}: ${formatDuration(r.online_without_status_ms)}`,
+    inline: true
   }));
   const embed = new EmbedBuilder()
+    .setColor(0x10b981)
     .setTitle(title)
-    .setDescription(list.join("\n"))
-    .setColor(0x5865F2);
+    .setAuthor({ name: guild.name, iconURL: icon || undefined })
+    .setFooter({ text: `${Lguild.guild_footer_prefix}: ${guild.name} • ${rangeStr}` })
+    .setTimestamp(now)
+    .addFields(fields);
+  if (icon) embed.setThumbnail(icon);
   await channel.send({ embeds: [embed] });
 }
 
@@ -396,32 +624,96 @@ function startPanelServer() {
 
   app.get("/api/rank", requireAuth, async (req, res) => {
     const period = req.query.period || "weekly";
-    const metric = req.query.metric === "online" ? "online" : "status";
+    const metricReq = (req.query.metric || "status").toLowerCase();
+    const metric = ["online", "status", "desired_online"].includes(metricReq) ? metricReq : "status";
     const limit = Math.min(50, Math.max(1, Number(req.query.limit || config.topNDefault || 10)));
     const now = new Date();
     const guild = BOT_GUILD;
     if (!guild) return res.status(503).json({ error: "bot_not_ready" });
     const guildId = guild.id;
-    let rows = [];
-    if (period === "daily") rows = getTopDaily(guildId, `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`, metric, limit);
-    else if (period === "weekly") rows = getTopWeekly(guildId, isoWeekLabel(now), metric, limit);
-    else rows = getTopMonthly(guildId, monthLabel(now), metric, limit);
+    if (metric !== "desired_online") {
+      let rows = [];
+      if (period === "daily") rows = getTopDaily(guildId, `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`, metric, limit);
+      else if (period === "weekly") rows = getTopWeekly(guildId, isoWeekLabel(now), metric, limit);
+      else rows = getTopMonthly(guildId, monthLabel(now), metric, limit);
 
-    const payload = await Promise.all(rows.map(async (r) => {
-      const m = await guild.members.fetch(r.user_id).catch(() => null);
-      return {
-        user_id: r.user_id,
-        name: m ? (m.displayName || m.user.username) : r.user_id,
-        online_ms: r.online_ms,
-        status_ms: r.status_ms,
-      };
+      if (period === "daily" && (!rows || rows.length === 0)) {
+        await guild.members.fetch();
+        const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+        const startMs = startOfDay(now), endMs = endOfDay(now);
+        const computed = await Promise.all(watchers.map(async (m) => {
+          try {
+            const onlineSessions = getOnlineSessionsBetween(m.id, startMs, endMs);
+            const statusSessions = getStatusSessionsBetween(m.id, startMs, endMs);
+            const onlineMs = sumOverlap(onlineSessions, startMs, endMs);
+            const statusMs = sumOverlap(statusSessions, startMs, endMs);
+            const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+            const onlineWithoutStatusMs = Math.max(0, onlineMs - desiredOnlineMs);
+            return { user_id: m.id, name: m.displayName || m.user.username, online_ms: onlineMs, status_ms: statusMs, desired_online_ms: desiredOnlineMs, online_without_status_ms: onlineWithoutStatusMs };
+          } catch {
+            return { user_id: m.id, name: m.displayName || m.user.username, online_ms: 0, status_ms: 0, desired_online_ms: 0, online_without_status_ms: 0 };
+          }
+        }));
+        computed.sort((a, b) => (metric === 'online' ? (b.online_ms - a.online_ms) : (b.status_ms - a.status_ms)));
+        return res.json(computed.slice(0, limit));
+      }
+
+      const rangeStart = period === "daily" ? startOfDay(now) : (period === "weekly" ? startOfWeek(now) : startOfMonth(now));
+      const rangeEnd = period === "daily" ? endOfDay(now) : (period === "weekly" ? endOfWeek(now) : endOfMonth(now));
+      const payload = await Promise.all(rows.map(async (r) => {
+        const m = await guild.members.fetch(r.user_id).catch(() => null);
+        const onlineSessions = getOnlineSessionsBetween(r.user_id, rangeStart, rangeEnd);
+        const statusSessions = getStatusSessionsBetween(r.user_id, rangeStart, rangeEnd);
+        const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, rangeStart, rangeEnd);
+        const onlineTotalMs = r.online_ms;
+        const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
+        return {
+          user_id: r.user_id,
+          name: m ? (m.displayName || m.user.username) : r.user_id,
+          online_ms: r.online_ms,
+          status_ms: r.status_ms,
+          desired_online_ms: desiredOnlineMs,
+          online_without_status_ms: onlineWithoutStatusMs,
+        };
+      }));
+      return res.json(payload);
+    }
+
+    await guild.members.fetch();
+    const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+    let startMs, endMs;
+    if (period === "daily") { startMs = startOfDay(now); endMs = endOfDay(now); }
+    else if (period === "weekly") { startMs = startOfWeek(now); endMs = endOfWeek(now); }
+    else { startMs = startOfMonth(now); endMs = endOfMonth(now); }
+
+    const rows = await Promise.all(watchers.map(async (m) => {
+      try {
+        const onlineSessions = getOnlineSessionsBetween(m.id, startMs, endMs);
+        const statusSessions = getStatusSessionsBetween(m.id, startMs, endMs);
+        const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+        const statusMs = sumOverlap(statusSessions, startMs, endMs);
+        const onlineTotalMs = sumOverlap(onlineSessions, startMs, endMs);
+        const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
+        return {
+          user_id: m.id,
+          name: m.displayName || m.user.username,
+          online_ms: desiredOnlineMs,
+          status_ms: statusMs,
+          desired_online_ms: desiredOnlineMs,
+          online_without_status_ms: onlineWithoutStatusMs,
+        };
+      } catch {
+        return { user_id: m.id, name: m.displayName || m.user.username, online_ms: 0, status_ms: 0, desired_online_ms: 0, online_without_status_ms: 0 };
+      }
     }));
-    res.json(payload);
+    rows.sort((a, b) => b.online_ms - a.online_ms);
+    res.json(rows.slice(0, limit));
   });
 
   app.post("/api/send_rank_embed", requireAuth, async (req, res) => {
     const period = req.body.period || "weekly";
-    const metric = req.body.metric === "online" ? "online" : "status";
+    const metricReq = (req.body.metric || "status").toLowerCase();
+    const metric = ["online", "status", "desired_online"].includes(metricReq) ? metricReq : "status";
     const limit = Math.min(50, Math.max(1, Number(req.body.limit || config.topNDefault || 10)));
     const channelId = req.body.channel_id || null;
     try {
@@ -501,19 +793,183 @@ client.on("interactionCreate", async (interaction) => {
       const wStart = startOfWeek(now), wEnd = endOfWeek(now);
       const mStart = startOfMonth(now), mEnd = endOfMonth(now);
 
-      const dOnline = sumOverlap(getOnlineSessionsBetween(member.id, dStart, dEnd), dStart, dEnd);
-      const wOnline = sumOverlap(getOnlineSessionsBetween(member.id, wStart, wEnd), wStart, wEnd);
-      const mOnline = sumOverlap(getOnlineSessionsBetween(member.id, mStart, mEnd), mStart, mEnd);
+      const dOnlineSessions = getOnlineSessionsBetween(member.id, dStart, dEnd);
+      const dStatusSessions = getStatusSessionsBetween(member.id, dStart, dEnd);
+      const dOnlineTotal = sumOverlap(dOnlineSessions, dStart, dEnd);
+      const dDesired = sumIntersection(dOnlineSessions, dStatusSessions, dStart, dEnd);
+      const dWithout = Math.max(0, dOnlineTotal - dDesired);
 
+      const wOnlineSessions = getOnlineSessionsBetween(member.id, wStart, wEnd);
+      const wStatusSessions = getStatusSessionsBetween(member.id, wStart, wEnd);
+      const wOnlineTotal = sumOverlap(wOnlineSessions, wStart, wEnd);
+      const wDesired = sumIntersection(wOnlineSessions, wStatusSessions, wStart, wEnd);
+      const wWithout = Math.max(0, wOnlineTotal - wDesired);
+
+      const mOnlineSessions = getOnlineSessionsBetween(member.id, mStart, mEnd);
+      const mStatusSessions = getStatusSessionsBetween(member.id, mStart, mEnd);
+      const mOnlineTotal = sumOverlap(mOnlineSessions, mStart, mEnd);
+      const mDesired = sumIntersection(mOnlineSessions, mStatusSessions, mStart, mEnd);
+      const mWithout = Math.max(0, mOnlineTotal - mDesired);
+
+      const L = I18N[pickLocale(interaction)];
       const lines = [
-        `User: <@${member.id}>`,
-        `Today Online: ${formatDuration(dOnline)}`,
-        `This Week Online: ${formatDuration(wOnline)}`,
-        `This Month Online: ${formatDuration(mOnline)}`
+        `${L.user_label}: <@${member.id}>`,
+        `${L.today}: 🟢 ${L.with_status}: ${formatDuration(dDesired)} • ⚪ ${L.without_status}: ${formatDuration(dWithout)}`,
+        `${L.this_week}: 🟢 ${L.with_status}: ${formatDuration(wDesired)} • ⚪ ${L.without_status}: ${formatDuration(wWithout)}`,
+        `${L.this_month}: 🟢 ${L.with_status}: ${formatDuration(mDesired)} • ⚪ ${L.without_status}: ${formatDuration(mWithout)}`
       ];
       return interaction.reply({ content: lines.join("\n"), ephemeral: true });
     } catch (e) {
       console.error("mytime command error:", e);
+      return interaction.reply({ content: "An error occurred.", ephemeral: true });
+    }
+  }
+
+  if (commandName === "leader") {
+    try {
+      const period = (interaction.options.getString("period") || "weekly").toLowerCase();
+      const metricReq = (interaction.options.getString("metric") || "desired_online").toLowerCase();
+      const metric = ["online", "desired_online"].includes(metricReq) ? metricReq : "desired_online";
+      const limit = 15;
+
+      const now = new Date();
+      const guildId = guild.id;
+      await guild.members.fetch();
+
+      const L = I18N[pickLocale(interaction)];
+      let title = "";
+      if (metric !== "desired_online") {
+        let rows = [];
+        if (period === "daily") {
+          const dateDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+          rows = getTopDaily(guildId, dateDay, metric, limit);
+          title = fmtTitle(L, "daily", limit, metric === 'online' ? L.metric_online : L.metric_status);
+        } else if (period === "weekly") {
+          const label = isoWeekLabel(now);
+          rows = getTopWeekly(guildId, label, metric, limit);
+          title = fmtTitle(L, "weekly", limit, metric === 'online' ? L.metric_online : L.metric_status);
+        } else {
+          const label = monthLabel(now);
+          rows = getTopMonthly(guildId, label, metric, limit);
+          title = fmtTitle(L, "monthly", limit, metric === 'online' ? L.metric_online : L.metric_status);
+        }
+
+        // Fallback for daily if empty
+        if (period === "daily" && (!rows || !rows.length)) {
+          const startMs = startOfDay(now), endMs = endOfDay(now);
+          const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+          const computed = await Promise.all(watchers.map(async (m) => {
+            try {
+              const onlineSessions = getOnlineSessionsBetween(m.id, startMs, endMs);
+              const statusSessions = getStatusSessionsBetween(m.id, startMs, endMs);
+              const onlineMs = sumOverlap(onlineSessions, startMs, endMs);
+              const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+              const onlineWithoutStatusMs = Math.max(0, onlineMs - desiredOnlineMs);
+              return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: desiredOnlineMs, online_without_status_ms: onlineWithoutStatusMs };
+            } catch {
+              return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: 0, online_without_status_ms: 0 };
+            }
+          }));
+          computed.sort((a, b) => (metric === 'online'
+            ? (b.desired_online_ms + b.online_without_status_ms) - (a.desired_online_ms + a.online_without_status_ms)
+            : (b.desired_online_ms - a.desired_online_ms))
+          );
+          const top = computed.slice(0, limit);
+          const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
+          const rankLabel = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
+          const fields = top.map((r, i) => ({
+            name: `${rankLabel(i)} ${r.name}`,
+            value: `🟢 ${L.with_status}: ${formatDuration(r.desired_online_ms)} • ⚪ ${L.without_status}: ${formatDuration(r.online_without_status_ms)}`,
+            inline: true
+          }));
+          const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
+          const embed = new EmbedBuilder()
+            .setColor(0x10b981)
+            .setTitle(title)
+            .setAuthor({ name: guild.name, iconURL: icon || undefined })
+            .setFooter({ text: `${L.guild_footer_prefix}: ${guild.name} • ${rangeStr}` })
+            .setTimestamp(now)
+            .addFields(fields);
+          if (icon) embed.setThumbnail(icon);
+          return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+
+        if (!rows.length) {
+          const perLabel = period === "daily" ? L.period_daily : (period === "weekly" ? L.period_weekly : L.period_monthly);
+          return interaction.reply({ content: L.no_data_period.replace("{period}", perLabel), ephemeral: true });
+        }
+
+        // Aggregated rows: compute intersection and without for display
+        let startMs, endMs;
+        if (period === "daily") { startMs = startOfDay(now); endMs = endOfDay(now); }
+        else if (period === "weekly") { startMs = startOfWeek(now); endMs = endOfWeek(now); }
+        else { startMs = startOfMonth(now); endMs = endOfMonth(now); }
+        const topFields = await Promise.all(rows.map(async (r, i) => {
+          const m = await guild.members.fetch(r.user_id).catch(() => null);
+          const name = m ? (m.displayName || m.user.username) : r.user_id;
+          const onlineSessions = getOnlineSessionsBetween(r.user_id, startMs, endMs);
+          const statusSessions = getStatusSessionsBetween(r.user_id, startMs, endMs);
+          const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+          const onlineTotalMs = r.online_ms || sumOverlap(onlineSessions, startMs, endMs);
+          const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
+          const rankLabel = (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
+          return {
+            name: `${rankLabel} ${name}`,
+            value: `🟢 ${L.with_status}: ${formatDuration(desiredOnlineMs)} • ⚪ ${L.without_status}: ${formatDuration(onlineWithoutStatusMs)}`,
+            inline: true
+          };
+        }));
+        const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
+        const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
+        const embed = new EmbedBuilder()
+          .setColor(0x10b981)
+          .setTitle(title)
+          .setAuthor({ name: guild.name, iconURL: icon || undefined })
+          .setFooter({ text: `${L.guild_footer_prefix}: ${guild.name} • ${rangeStr}` })
+          .setTimestamp(now)
+          .addFields(topFields);
+        if (icon) embed.setThumbnail(icon);
+        return interaction.reply({ embeds: [embed], ephemeral: true });
+      }
+
+      let startMs, endMs;
+      if (period === "daily") { startMs = startOfDay(now); endMs = endOfDay(now); title = fmtTitle(L, "daily", limit, L.metric_split); }
+      else if (period === "weekly") { startMs = startOfWeek(now); endMs = endOfWeek(now); title = fmtTitle(L, "weekly", limit, L.metric_split); }
+      else { startMs = startOfMonth(now); endMs = endOfMonth(now); title = fmtTitle(L, "monthly", limit, L.metric_split); }
+      const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+      const rows = await Promise.all(watchers.map(async (m) => {
+        try {
+          const onlineSessions = getOnlineSessionsBetween(m.id, startMs, endMs);
+          const statusSessions = getStatusSessionsBetween(m.id, startMs, endMs);
+          const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+          const onlineTotalMs = sumOverlap(onlineSessions, startMs, endMs);
+          const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
+          return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: desiredOnlineMs, online_without_status_ms: onlineWithoutStatusMs };
+        } catch {
+          return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: 0, online_without_status_ms: 0 };
+        }
+      }));
+      rows.sort((a, b) => b.desired_online_ms - a.desired_online_ms);
+      const top = rows.slice(0, limit);
+      const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
+      const rankLabel = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
+      const fields = top.map((r, i) => ({
+        name: `${rankLabel(i)} ${r.name}`,
+        value: `🟢 ${L.with_status}: ${formatDuration(r.desired_online_ms)} • ⚪ ${L.without_status}: ${formatDuration(r.online_without_status_ms)}`,
+        inline: true
+      }));
+      const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
+      const embed = new EmbedBuilder()
+        .setColor(0x10b981)
+        .setTitle(title)
+        .setAuthor({ name: guild.name, iconURL: icon || undefined })
+        .setFooter({ text: `${L.guild_footer_prefix}: ${guild.name} • ${rangeStr}` })
+        .setTimestamp(now)
+        .addFields(fields);
+      if (icon) embed.setThumbnail(icon);
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    } catch (e) {
+      console.error("leader command error:", e);
       return interaction.reply({ content: "An error occurred.", ephemeral: true });
     }
   }
