@@ -3,12 +3,13 @@
   "controlChannelId": "x",
   "adminRoleId": "x",
   "watchRoleId": "x",
-  "desiredStatusText": "a",
+  "desiredStatusText": "x",
   "checkIntervalMinutes": 5,
   "reportChannelId": "x",
   "enableDailySummary": true,
   "enableWeeklySummary": true,
   "enableMonthlySummary": true,
   "topNDefault": 10,
-  "panelPort": 3000
+  "panelPort": 3000,
+  "eventRefreshSeconds": 5
 }

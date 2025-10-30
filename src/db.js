@@ -186,6 +186,25 @@ const rankMonthlyBy = db.prepare(`
   LIMIT ?
 `);
 
+const deleteByGuild = {
+  userSessions: db.prepare("DELETE FROM user_sessions WHERE guild_id = ?"),
+  statusSessions: db.prepare("DELETE FROM status_sessions WHERE guild_id = ?"),
+  dailyAgg: db.prepare("DELETE FROM daily_aggregates WHERE guild_id = ?"),
+  weeklyAgg: db.prepare("DELETE FROM weekly_aggregates WHERE guild_id = ?"),
+  monthlyAgg: db.prepare("DELETE FROM monthly_aggregates WHERE guild_id = ?"),
+};
+
+const clearGuildData = (guildId) => {
+  const tx = db.transaction((g) => {
+    deleteByGuild.userSessions.run(g);
+    deleteByGuild.statusSessions.run(g);
+    deleteByGuild.dailyAgg.run(g);
+    deleteByGuild.weeklyAgg.run(g);
+    deleteByGuild.monthlyAgg.run(g);
+  });
+  tx(guildId);
+};
+
 const saveDailyAggregate = (userId, guildId, dateDay, onlineMs, statusMs, nowMs = Date.now()) => {
   upsertDaily.run(userId, guildId, dateDay, onlineMs, statusMs, nowMs, nowMs);
 };
@@ -217,4 +236,5 @@ module.exports = {
   getTopDaily,
   getTopWeekly,
   getTopMonthly,
+  clearGuildData,
 };

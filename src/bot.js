@@ -5,7 +5,11 @@ const {
   Client,
   GatewayIntentBits,
   ActivityType,
-  EmbedBuilder
+  EmbedBuilder,
+  AttachmentBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } = require("discord.js");
 const config = require("../config.json");
 const {
@@ -21,7 +25,8 @@ const {
   saveMonthlyAggregate,
   getTopDaily,
   getTopWeekly,
-  getTopMonthly
+  getTopMonthly,
+  clearGuildData
 } = require("./db");
 const cron = require("node-cron");
 const express = require("express");
@@ -85,12 +90,18 @@ const getPresence = (member) => member?.presence || null;
 const getCustomStatusText = (presence) => {
   if (!presence) return null;
   const custom = presence.activities?.find((a) => a.type === ActivityType.Custom);
-  return custom?.state || null;
+  if (!custom) return null;
+  const state = custom?.state || null;
+  if (state && state.trim().length > 0) return state;
+  const emojiName = custom?.emoji?.name || null;
+  return emojiName || null;
 };
 const isOnlineStatus = (presence) => ["online", "idle", "dnd"].includes(presence?.status);
+let ACTIVE_EVENT = null;
+
 const hasDesiredStatus = (text) => {
   if (!text) return false;
-  const want = (config.desiredStatusText || "").trim().toLowerCase();
+  const want = ((ACTIVE_EVENT?.statusText ?? config.desiredStatusText) || "").trim().toLowerCase();
   if (!want) return false;
   return text.toLowerCase().includes(want);
 };
@@ -100,15 +111,16 @@ const handleMemberSnapshot = (member) => {
     if (!isWatchedMember(member)) return;
     const presence = getPresence(member);
     const ts = nowTs();
+    const online = presence ? isOnlineStatus(presence) : false;
 
-    if (isOnlineStatus(presence)) {
+    if (online) {
       startOnlineSession(member.id, member.guild.id, ts);
     } else {
       endOnlineSession(member.id, ts);
     }
 
-    const customText = getCustomStatusText(presence);
-    if (hasDesiredStatus(customText)) {
+    const customText = presence ? getCustomStatusText(presence) : null;
+    if (online && hasDesiredStatus(customText)) {
       startStatusSession(member.id, member.guild.id, ts, customText);
     } else {
       endStatusSession(member.id, ts);
@@ -174,8 +186,11 @@ const I18N = {
 
 const pickLocale = (interactionOrGuild) => {
   try {
-    const loc = interactionOrGuild?.locale || interactionOrGuild?.preferredLocale || "en-US";
-    return I18N[loc] ? loc : "en-US";
+    const raw = interactionOrGuild?.locale || interactionOrGuild?.preferredLocale || "en-US";
+    const loc = String(raw).toLowerCase();
+    if (loc.startsWith("tr")) return "tr"; // normalize tr-TR -> tr
+    if (loc.startsWith("en")) return "en-US";
+    return "en-US";
   } catch {
     return "en-US";
   }
@@ -289,12 +304,100 @@ client.once("ready", async () => {
               ]
             }
           ]
+        },
+        {
+          name: "event",
+          name_localizations: { "tr": "etkinlik", "en-US": "event" },
+          description: "Manage event mode",
+          description_localizations: { "tr": "Etkinlik modunu yönet" },
+          options: [
+            {
+              type: 1,
+              name: "start",
+              name_localizations: { "tr": "baslat" },
+              description: "Start an event",
+              description_localizations: { "tr": "Bir etkinlik başlat" },
+              options: [
+                {
+                  name: "status_text",
+                  name_localizations: { "tr": "durum_meti" },
+                  description: "Required status text for event",
+                  description_localizations: { "tr": "Etkinlik için gereken durum metni" },
+                  type: 3,
+                  required: true
+                },
+                {
+                  name: "duration_hours",
+                  name_localizations: { "tr": "sure_saat" },
+                  description: "Event window duration in hours",
+                  description_localizations: { "tr": "Etkinlik penceresi (saat)" },
+                  type: 4,
+                  required: false
+                },
+                {
+                  name: "channel",
+                  name_localizations: { "tr": "kanal" },
+                  description: "Scoreboard channel",
+                  description_localizations: { "tr": "Skorboard kanalı" },
+                  type: 7,
+                  required: false
+                },
+                {
+                  name: "limit",
+                  name_localizations: { "tr": "limit" },
+                  description: "Top N to show",
+                  description_localizations: { "tr": "Gösterilecek Top N" },
+                  type: 4,
+                  required: false
+                }
+              ]
+            },
+            {
+              type: 1,
+              name: "stop",
+              name_localizations: { "tr": "bitir" },
+              description: "Stop current event",
+              description_localizations: { "tr": "Mevcut etkinliği bitir" }
+            },
+            {
+              type: 1,
+              name: "export",
+              name_localizations: { "tr": "disa-aktar" },
+              description: "Export current event results as CSV",
+              description_localizations: { "tr": "Mevcut etkinlik sonuçlarını CSV olarak aktar" }
+            }
+          ]
+        },
+        {
+          name: "reward",
+          name_localizations: { "tr": "odul", "en-US": "reward" },
+          description: "Assign a role to Top N of current event",
+          description_localizations: { "tr": "Mevcut etkinliğin Top N'ine rol ataması yap" },
+          options: [
+            {
+              name: "role",
+              name_localizations: { "tr": "rol" },
+              description: "Role to grant",
+              description_localizations: { "tr": "Verilecek rol" },
+              type: 8,
+              required: true
+            },
+            {
+              name: "limit",
+              name_localizations: { "tr": "limit" },
+              description: "Top N winners",
+              description_localizations: { "tr": "Kazanan Top N" },
+              type: 4,
+              required: false
+            }
+          ]
         }
       ];
     await client.application.commands.set(commands, config.guildId);
     console.log("Slash commands registered.");
 
     try {
+      await guild.members.fetch({ withPresences: true });
       const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
       watchers.forEach((m) => handleMemberSnapshot(m));
     } catch (e) {
@@ -304,7 +407,7 @@ client.once("ready", async () => {
     const intervalMs = Math.max(1, Number(config.checkIntervalMinutes || 5)) * 60000;
     setInterval(async () => {
       try {
-        await guild.members.fetch();
+        await guild.members.fetch({ withPresences: true });
         const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
         watchers.forEach((m) => handleMemberSnapshot(m));
         console.log(`Periodic check done - ${watchers.size} users`);
@@ -349,6 +452,7 @@ client.on("presenceUpdate", (oldPresence, newPresence) => {
     const member = newPresence?.member;
     if (member && isWatchedMember(member)) {
       handleMemberSnapshot(member);
+      if (ACTIVE_EVENT) scheduleEventScoreboardUpdate(member.guild, 2000);
     }
   } catch (err) {
     console.error("presenceUpdate error:", err);
@@ -412,6 +516,19 @@ async function computeAndStoreMonthly(guild, startObj) {
 
 function msToHours(ms) { return (ms / 3600000).toFixed(2); }
 
+function formatHMS(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '0 h 0 min 0 sec';
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${h} h ${m} min ${s} sec`;
+}
+
+function statusLabel(localeSource) {
+  return (pickLocale(localeSource) === 'tr') ? 'Status' /* or 'Durum' if preferred */ : 'Status';
+}
+
 async function sendRankEmbed(guild, period, metric, limit, channelIdOverride) {
   const channelId = channelIdOverride || (config.reportChannelId || config.controlChannelId);
   const channel = guild.channels.cache.get(channelId);
@@ -428,7 +545,6 @@ async function sendRankEmbed(guild, period, metric, limit, channelIdOverride) {
       const dateDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
       rows = getTopDaily(guildId, dateDay, metric, limit);
       title = `Daily Top ${limit} (${metric === 'online' ? 'Online' : 'Status'})`;
-      // Fallback for today: compute on the fly if aggregates empty
       if (!rows || rows.length === 0) {
         await guild.members.fetch();
         const startMs = startOfDay(now), endMs = endOfDay(now);
@@ -445,7 +561,6 @@ async function sendRankEmbed(guild, period, metric, limit, channelIdOverride) {
             return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: 0, online_without_status_ms: 0 };
           }
         }));
-        // Sort by selected metric: if 'online' use total online (desired + without), if 'status' use desired_online
         computed.sort((a, b) => (metric === 'online'
           ? (b.desired_online_ms + b.online_without_status_ms) - (a.desired_online_ms + a.online_without_status_ms)
           : (b.desired_online_ms - a.desired_online_ms))
@@ -454,8 +569,8 @@ async function sendRankEmbed(guild, period, metric, limit, channelIdOverride) {
         const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
         const rankLabel = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
         const fields = top.map((r, i) => ({
-          name: `${rankLabel(i)} ${r.name}`,
-          value: `🟢 w/ Status: ${formatDuration(r.desired_online_ms)} • ⚪ w/o Status: ${formatDuration(r.online_without_status_ms)}`,
+          name: `${rankLabel(i)} ${r.name} — ${formatHMS(r.desired_online_ms)}`,
+          value: "\u200B",
           inline: true
         }));
         const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
@@ -493,12 +608,10 @@ async function sendRankEmbed(guild, period, metric, limit, channelIdOverride) {
       const onlineSessions = getOnlineSessionsBetween(r.user_id, startMs, endMs);
       const statusSessions = getStatusSessionsBetween(r.user_id, startMs, endMs);
       const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
-      const onlineTotalMs = r.online_ms || sumOverlap(onlineSessions, startMs, endMs);
-      const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
       const rankLabel = (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
       return {
-        name: `${rankLabel} ${name}`,
-        value: `🟢 w/ Status: ${formatDuration(desiredOnlineMs)} • ⚪ w/o Status: ${formatDuration(onlineWithoutStatusMs)}`,
+        name: `${rankLabel} ${name} — ${formatHMS(desiredOnlineMs)}`,
+        value: "\u200B",
         inline: true
       };
     }));
@@ -541,8 +654,8 @@ async function sendRankEmbed(guild, period, metric, limit, channelIdOverride) {
   const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
   const rankLabel = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
   const fields = top.map((r, i) => ({
-    name: `${rankLabel(i)} ${r.name}`,
-    value: `🟢 ${Lguild.with_status}: ${formatDuration(r.desired_online_ms)} • ⚪ ${Lguild.without_status}: ${formatDuration(r.online_without_status_ms)}`,
+    name: `${rankLabel(i)} ${r.name} — ${formatHMS(r.desired_online_ms)}`,
+    value: "\u200B",
     inline: true
   }));
   const embed = new EmbedBuilder()
@@ -758,6 +871,220 @@ function startPanelServer() {
     }
   });
 
+  app.get("/api/event/state", requireAuth, async (req, res) => {
+    try {
+      const ev = ACTIVE_EVENT
+        ? {
+            startMs: ACTIVE_EVENT.startMs,
+            endMs: ACTIVE_EVENT.endMs ?? null,
+            statusText: ACTIVE_EVENT.statusText,
+            channelId: ACTIVE_EVENT.channelId,
+            messageId: ACTIVE_EVENT.messageId ?? null,
+            limit: ACTIVE_EVENT.limit || 15,
+          }
+        : null;
+      res.json({ active: !!ACTIVE_EVENT, event: ev });
+    } catch (e) {
+      console.error("/api/event/state error:", e);
+      res.status(500).json({ error: "failed" });
+    }
+  });
+
+  app.post("/api/event/start", requireAuth, async (req, res) => {
+    try {
+      const guild = BOT_GUILD;
+      if (!guild) return res.status(503).json({ error: "bot_not_ready" });
+      const statusText = (req.body.status_text || "").trim();
+      if (!statusText) return res.status(400).json({ error: "status_text_required" });
+      const durationHoursRaw = req.body.duration_hours;
+      const durationHours = durationHoursRaw === null || durationHoursRaw === undefined ? null : Number(durationHoursRaw);
+      const limit = Math.min(50, Math.max(1, Number(req.body.limit || 15)));
+      const channelId = req.body.channel_id || config.reportChannelId;
+      const now = Date.now();
+      ACTIVE_EVENT = {
+        startMs: now,
+        endMs: durationHours ? now + durationHours * 3600000 : null,
+        statusText,
+        channelId,
+        messageId: null,
+        limit,
+        pageIndex: 0,
+        milestones: {},
+        refreshHandle: null,
+        rankSource: (config?.eventLeaderboardSource) || 'panel',
+        rankPeriod: (config?.eventSeedPeriod) || 'weekly',
+      };
+      try {
+        await guild.members.fetch({ withPresences: true });
+        const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+        watchers.forEach((m) => handleMemberSnapshot(m));
+      } catch (snapErr) {
+        console.error("Initial event snapshot error:", snapErr);
+      }
+      await ensureEventScoreboardMessage(guild);
+      await updateEventScoreboard(guild);
+      try {
+        if (ACTIVE_EVENT.refreshHandle) clearInterval(ACTIVE_EVENT.refreshHandle);
+      } catch {}
+      const refreshSeconds = Math.max(2, Number((config?.eventRefreshSeconds) || 10));
+      ACTIVE_EVENT.refreshHandle = setInterval(async () => {
+        try {
+          if (ACTIVE_EVENT?.endMs && Date.now() > ACTIVE_EVENT.endMs) {
+            clearInterval(ACTIVE_EVENT.refreshHandle);
+            ACTIVE_EVENT.refreshHandle = null;
+          }
+          await updateEventScoreboard(guild);
+        } catch (e) {
+          console.error("Event refresh error:", e);
+        }
+      }, refreshSeconds * 1000);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("/api/event/start error:", e);
+      res.status(500).json({ error: "failed" });
+    }
+  });
+
+  app.post("/api/event/stop", requireAuth, async (req, res) => {
+    try {
+      const guild = BOT_GUILD;
+      if (!guild) return res.status(503).json({ error: "bot_not_ready" });
+      if (!ACTIVE_EVENT) return res.status(400).json({ error: "no_active_event" });
+      try {
+        if (ACTIVE_EVENT.refreshHandle) clearInterval(ACTIVE_EVENT.refreshHandle);
+      } catch {}
+      const ended = ACTIVE_EVENT;
+      ACTIVE_EVENT = null;
+      const channelId = ended.channelId || config.reportChannelId;
+      const channel = guild.channels.cache.get(channelId) || (await guild.channels.fetch(channelId).catch(() => null));
+      if (channel && ended.messageId) {
+        const message = await channel.messages.fetch(ended.messageId).catch(() => null);
+        if (message) {
+          const L = I18N[pickLocale(guild)];
+          const rangeStr = `${formatTime(ended.startMs)} – ${formatTime(ended.endMs ?? Date.now())}`;
+          const embed = message.embeds?.[0] ? EmbedBuilder.from(message.embeds[0]) : new EmbedBuilder();
+          embed.setFooter({ text: `${L.guild_footer_prefix}: ${guild.name} • ${rangeStr} • (Ended)` }).setTimestamp(Date.now());
+          await message.edit({ embeds: [embed] });
+        }
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("/api/event/stop error:", e);
+      res.status(500).json({ error: "failed" });
+    }
+  });
+
+  app.post("/api/event/reset", requireAuth, async (req, res) => {
+    try {
+      const guild = BOT_GUILD;
+      if (!guild) return res.status(503).json({ error: "bot_not_ready" });
+      if (ACTIVE_EVENT) {
+        const now = Date.now();
+        ACTIVE_EVENT.startMs = now;
+        ACTIVE_EVENT.milestones = {};
+        try { ACTIVE_EVENT.lastMyTime = null; } catch {}
+      }
+      try {
+        clearGuildData(guild.id);
+      } catch (purgeErr) {
+        console.error("Guild data purge error:", purgeErr);
+        return res.status(500).json({ error: "purge_failed" });
+      }
+      try {
+        await guild.members.fetch({ withPresences: true });
+        const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+        watchers.forEach((m) => handleMemberSnapshot(m));
+        try {
+          const L = I18N[pickLocale(guild)];
+          const locale = pickLocale(guild);
+          let online = 0, idle = 0, dnd = 0, offline = 0;
+          let desiredYes = 0, desiredNo = 0;
+          const nonCompliant = [];
+          watchers.forEach((m) => {
+            const presence = getPresence(m);
+            const status = presence?.status || 'offline';
+            if (status === 'online') online++; else if (status === 'idle') idle++; else if (status === 'dnd') dnd++; else offline++;
+            const custom = getCustomStatusText(presence);
+            const compliant = hasDesiredStatus(custom);
+            if (compliant) desiredYes++; else { desiredNo++; nonCompliant.push(m); }
+          });
+          const headLabel = (locale === 'tr') ? 'Reset Özeti' : 'Reset Summary';
+          const statusLabelOnline = (locale === 'tr') ? 'Çevrimiçi' : 'Online';
+          const statusLabelIdle = (locale === 'tr') ? 'Uzakta' : 'Away';
+          const statusLabelDnd = (locale === 'tr') ? 'Rahatsız Etmeyin' : 'DND';
+          const statusLabelOffline = (locale === 'tr') ? 'Çevrimdışı' : 'Offline';
+          const desiredLabel = (locale === 'tr') ? 'İstenen Durum' : 'Desired Status';
+          const yesLabel = (locale === 'tr') ? 'Evet' : 'Yes';
+          const noLabel = (locale === 'tr') ? 'Hayır' : 'No';
+          const totalLabel = (locale === 'tr') ? 'Toplam İzlenen' : 'Monitored Total';
+          const nonCompLabel = (locale === 'tr') ? 'Uymayanlar (anlık)' : 'Non-compliant (current)';
+          const desc = [
+            `${totalLabel}: ${watchers.size}`,
+            `${statusLabelOnline}: ${online} • ${statusLabelIdle}: ${idle} • ${statusLabelDnd}: ${dnd} • ${statusLabelOffline}: ${offline}`,
+            `${desiredLabel}: ${yesLabel} ${desiredYes} • ${noLabel} ${desiredNo}`
+          ].join("\n");
+          const embed = new EmbedBuilder()
+            .setTitle(headLabel)
+            .setDescription(desc)
+            .setColor(0x00AE86)
+            .addFields(
+              nonCompliant.length
+                ? [{ name: nonCompLabel, value: nonCompliant.slice(0, 20).map((m) => `<@${m.id}>`).join(", ") }]
+                : []
+            )
+            .setTimestamp(Date.now());
+          const targetChannelId = config.controlChannelId || config.reportChannelId;
+          const outChan = guild.channels.cache.get(targetChannelId) || await guild.channels.fetch(targetChannelId).catch(() => null);
+          if (outChan) {
+            await outChan.send({ embeds: [embed] });
+          }
+        } catch (summaryErr) {
+          console.error("Reset summary error:", summaryErr);
+        }
+      } catch (snapErr) {
+        console.error("Post-reset snapshot error:", snapErr);
+      }
+      try { if (ACTIVE_EVENT) await updateEventScoreboard(guild); } catch {}
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("/api/event/reset error:", e);
+      res.status(500).json({ error: "failed" });
+    }
+  });
+
+  app.get("/api/event/export", requireAuth, async (req, res) => {
+    try {
+      const guild = BOT_GUILD;
+      if (!guild) return res.status(503).json({ error: "bot_not_ready" });
+      if (!ACTIVE_EVENT) return res.status(400).json({ error: "no_active_event" });
+      const now = Date.now();
+      const startMs = ACTIVE_EVENT.startMs;
+      const endMs = ACTIVE_EVENT.endMs ?? now;
+      const limit = ACTIVE_EVENT.limit || 15;
+      const rankSource = ACTIVE_EVENT?.rankSource || (config?.eventLeaderboardSource) || 'panel';
+      const period = ACTIVE_EVENT?.rankPeriod || (config?.eventSeedPeriod) || 'weekly';
+      const rows = rankSource === 'panel'
+        ? await computePeriodDesiredRank(guild, period, limit)
+        : await computeEventRanking(guild, startMs, endMs, limit);
+      const header = ["user_id", "username", "desired_online_ms", "online_without_status_ms", "total_online_ms"];
+      const lines = [header.join(",")].concat(
+        rows.map((r) => {
+          const total = (typeof r.total_online_ms === 'number')
+            ? r.total_online_ms
+            : ((r.desired_online_ms || 0) + (r.online_without_status_ms || 0));
+          return [r.user_id, String(r.name || "").replace(/,/g, " "), r.desired_online_ms, r.online_without_status_ms, total].join(",");
+        })
+      );
+      const csv = lines.join("\n");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="event_${formatDate(now)}.csv"`);
+      res.send(csv);
+    } catch (e) {
+      console.error("/api/event/export error:", e);
+      res.status(500).json({ error: "failed" });
+    }
+  });
+
   const port = Number(config.panelPort || 3000);
   app.listen(port, () => {
     console.log(`Panel ready: http://localhost:${port}/`);
@@ -767,15 +1094,301 @@ function startPanelServer() {
 
 const isAuthorized = (interaction) => {
   try {
-    const inChannel = interaction.channelId === config.controlChannelId;
     const hasRole = interaction.member?.roles?.cache?.has(config.adminRoleId);
-    return inChannel && hasRole;
+    return !!hasRole;
   } catch {
     return false;
   }
 };
 
+async function computeEventRanking(guild, startMs, endMs, limit) {
+  await guild.members.fetch();
+  const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+  const rows = await Promise.all(watchers.map(async (m) => {
+    try {
+      const onlineSessions = getOnlineSessionsBetween(m.id, startMs, endMs);
+      const statusSessions = getStatusSessionsBetween(m.id, startMs, endMs);
+      const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+      const onlineTotalMs = sumOverlap(onlineSessions, startMs, endMs);
+      const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
+      return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: desiredOnlineMs, online_without_status_ms: onlineWithoutStatusMs, total_online_ms: onlineTotalMs };
+    } catch {
+      return { user_id: m.id, name: m.displayName || m.user.username, desired_online_ms: 0, online_without_status_ms: 0, total_online_ms: 0 };
+    }
+  }));
+  rows.sort((a, b) => b.desired_online_ms - a.desired_online_ms);
+  return rows.slice(0, limit);
+}
+
+async function computePeriodDesiredRank(guild, period, limit) {
+  await guild.members.fetch();
+  const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+  const now = new Date();
+  let startMs, endMs;
+  if (period === "daily") { startMs = startOfDay(now); endMs = endOfDay(now); }
+  else if (period === "monthly") { startMs = startOfMonth(now); endMs = endOfMonth(now); }
+  else { startMs = startOfWeek(now); endMs = endOfWeek(now); }
+  const rows = await Promise.all(watchers.map(async (m) => {
+    try {
+      const onlineSessions = getOnlineSessionsBetween(m.id, startMs, endMs);
+      const statusSessions = getStatusSessionsBetween(m.id, startMs, endMs);
+      const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+      const statusMs = sumOverlap(statusSessions, startMs, endMs);
+      const onlineTotalMs = sumOverlap(onlineSessions, startMs, endMs);
+      const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
+      return {
+        user_id: m.id,
+        name: m.displayName || m.user.username,
+        online_ms: desiredOnlineMs,
+        status_ms: statusMs,
+        desired_online_ms: desiredOnlineMs,
+        online_without_status_ms: onlineWithoutStatusMs,
+      };
+    } catch {
+      return { user_id: m.id, name: m.displayName || m.user.username, online_ms: 0, status_ms: 0, desired_online_ms: 0, online_without_status_ms: 0 };
+    }
+  }));
+  rows.sort((a, b) => b.online_ms - a.online_ms);
+  return rows.slice(0, limit);
+}
+
+async function ensureEventScoreboardMessage(guild) {
+  if (!ACTIVE_EVENT) return;
+  const channelId = ACTIVE_EVENT.channelId || config.reportChannelId;
+  const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel) return;
+  if (ACTIVE_EVENT.messageId) return; 
+  const L = I18N[pickLocale(guild)];
+  const title = `🎯 ${ACTIVE_EVENT.statusText} — ${L.metric_split}`;
+  const now = Date.now();
+  const rangeStr = `${formatTime(ACTIVE_EVENT.startMs)} – ${formatTime(ACTIVE_EVENT.endMs ?? now)}`;
+  const usePanel = ACTIVE_EVENT?.rankSource === 'panel';
+  const periodKey = (ACTIVE_EVENT?.rankPeriod === 'daily') ? 'today' : (ACTIVE_EVENT?.rankPeriod === 'monthly') ? 'this_month' : 'this_week';
+  const periodLabel = L[periodKey];
+  const embed = new EmbedBuilder()
+    .setColor(0x0ea5e9)
+    .setTitle(title)
+    .setDescription(usePanel ? `Period: ${periodLabel}` : `Window: ${rangeStr}`)
+    .setTimestamp(now);
+  const btnLabel = (pickLocale(guild) === 'tr') ? 'Benim Sürem' : 'My Time';
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('event_prev').setLabel('◀').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('event_next').setLabel('▶').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('mytime_self').setLabel(btnLabel).setStyle(ButtonStyle.Primary)
+  );
+  const msg = await channel.send({ embeds: [embed], components: [row] });
+  try { await msg.pin(); } catch {}
+  ACTIVE_EVENT.messageId = msg.id;
+}
+
+async function updateEventScoreboard(guild) {
+  if (!ACTIVE_EVENT) return;
+  const channelId = ACTIVE_EVENT.channelId || config.reportChannelId;
+  const pageSize = ACTIVE_EVENT.limit || 15;
+  const pageIndex = ACTIVE_EVENT.pageIndex || 0;
+  const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel) return;
+  await ensureEventScoreboardMessage(guild);
+  const message = ACTIVE_EVENT.messageId ? (await channel.messages.fetch(ACTIVE_EVENT.messageId).catch(() => null)) : null;
+  const now = Date.now();
+  const startMs = ACTIVE_EVENT.startMs;
+  const endMs = ACTIVE_EVENT.endMs ?? now;
+  const L = I18N[pickLocale(guild)];
+  const fetchLimit = Math.max(pageSize, (pageIndex + 1) * pageSize);
+  const usePanel = ACTIVE_EVENT?.rankSource === 'panel';
+  const top = usePanel
+    ? await computePeriodDesiredRank(guild, ACTIVE_EVENT.rankPeriod || "weekly", fetchLimit)
+    : await computeEventRanking(guild, startMs, endMs, fetchLimit);
+  const startIdx = pageIndex * pageSize;
+  const pageRows = top.slice(startIdx, startIdx + pageSize);
+  const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
+  const rankLabel = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
+  const fields = pageRows.map((r, i) => {
+    const globalIdx = startIdx + i;
+    return {
+      name: `${rankLabel(globalIdx)} ${r.name}`,
+      value: `🟢 ${L.with_status}: ${formatHMS(r.desired_online_ms)} • ⚪ ${L.without_status}: ${formatHMS(r.online_without_status_ms)}`,
+      inline: false
+    };
+  });
+  if (fields.length === 0) fields.push({ name: '—', value: L.no_data_period.replace('{period}', 'event'), inline: false });
+  const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
+  const periodKey = (ACTIVE_EVENT?.rankPeriod === 'daily') ? 'today' : (ACTIVE_EVENT?.rankPeriod === 'monthly') ? 'this_month' : 'this_week';
+  const periodLabel = L[periodKey];
+  const embed = new EmbedBuilder()
+    .setColor(0x10b981)
+    .setTitle(`🏁 Event Leaderboard — ${ACTIVE_EVENT.statusText}`)
+    .setAuthor({ name: guild.name, iconURL: icon || undefined })
+    .setFooter({ text: `${L.guild_footer_prefix}: ${guild.name} • ${usePanel ? `Period: ${periodLabel}` : rangeStr} • ${(pickLocale(guild)==='tr'?'Sayfa':'Page')} ${pageIndex + 1}` })
+    .setTimestamp(now)
+    .addFields(fields);
+  if (icon) embed.setThumbnail(icon);
+  const btnLabel = (pickLocale(guild) === 'tr') ? 'Benim Sürem' : 'My Time';
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('event_prev').setLabel('◀').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('event_next').setLabel('▶').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('mytime_self').setLabel(btnLabel).setStyle(ButtonStyle.Primary)
+  );
+  if (message) {
+    await message.edit({ embeds: [embed], components: [row] });
+  } else {
+    const newMsg = await channel.send({ embeds: [embed], components: [row] });
+    try { await newMsg.pin(); } catch {}
+    ACTIVE_EVENT.messageId = newMsg.id;
+  }
+  try { await announceMilestones(guild, top, channel); } catch {}
+}
+
+function scheduleEventScoreboardUpdate(guild, delayMs = 2000) {
+  try {
+    if (!ACTIVE_EVENT) return;
+    if (ACTIVE_EVENT.pendingUpdate) return;
+    ACTIVE_EVENT.pendingUpdate = setTimeout(async () => {
+      try {
+        await updateEventScoreboard(guild);
+      } catch (e) {
+        console.error("Event schedule update error:", e);
+      } finally {
+        try { clearTimeout(ACTIVE_EVENT.pendingUpdate); } catch {}
+        ACTIVE_EVENT.pendingUpdate = null;
+      }
+    }, delayMs);
+  } catch (e) {
+    console.error("scheduleEventScoreboardUpdate error:", e);
+  }
+}
+
+const DEFAULT_MILESTONE_HOURS = [1, 2, 5, 10];
+async function announceMilestones(guild, rankedRows, channel) {
+  if (!ACTIVE_EVENT) return;
+  if (!ACTIVE_EVENT.milestones) ACTIVE_EVENT.milestones = {};
+  for (const r of rankedRows) {
+    const ms = r.desired_online_ms;
+    const achievedIdx = DEFAULT_MILESTONE_HOURS.findIndex((h) => ms >= h * 3600000);
+    const prevIdx = ACTIVE_EVENT.milestones[r.user_id] ?? -1;
+    if (achievedIdx > prevIdx) {
+      ACTIVE_EVENT.milestones[r.user_id] = achievedIdx;
+      const hours = DEFAULT_MILESTONE_HOURS[achievedIdx];
+      const hourLabel = hours === 1 ? "hour" : "hours";
+      await channel.send(`🎉 <@${r.user_id}> has been online with status for ${hours} ${hourLabel}!`);
+    }
+  }
+}
+
 client.on("interactionCreate", async (interaction) => {
+  if (interaction.isButton()) {
+    try {
+      if (interaction.customId === "event_prev" || interaction.customId === "event_next") {
+        const guild = interaction.guild;
+        if (!ACTIVE_EVENT) { try { await interaction.deferUpdate(); } catch {} return; }
+        const pageSize = ACTIVE_EVENT.limit || 15;
+        const now = Date.now();
+        const startMs = ACTIVE_EVENT.startMs;
+        const endMs = ACTIVE_EVENT.endMs ?? now;
+        try {
+          const allTop = await computeEventRanking(guild, startMs, endMs, 500);
+          const maxPage = Math.max(0, Math.ceil(allTop.length / pageSize) - 1);
+          if (interaction.customId === "event_prev") {
+            ACTIVE_EVENT.pageIndex = Math.max(0, (ACTIVE_EVENT.pageIndex || 0) - 1);
+          } else {
+            ACTIVE_EVENT.pageIndex = Math.min(maxPage, (ACTIVE_EVENT.pageIndex || 0) + 1);
+          }
+        } catch {
+          // Fallback without clamping
+          if (interaction.customId === "event_prev") {
+            ACTIVE_EVENT.pageIndex = Math.max(0, (ACTIVE_EVENT.pageIndex || 0) - 1);
+          } else {
+            ACTIVE_EVENT.pageIndex = (ACTIVE_EVENT.pageIndex || 0) + 1;
+          }
+        }
+        try { await interaction.deferUpdate(); } catch {}
+        try { await updateEventScoreboard(guild); } catch {}
+        return;
+      }
+      if (interaction.customId === "mytime_self") {
+        const guild = interaction.guild;
+        await guild.members.fetch({ withPresences: true });
+        const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+        if (!member) return interaction.reply({ content: "Member not found.", ephemeral: true });
+        if (!isWatchedMember(member)) return interaction.reply({ content: "This feature is for watched members only.", ephemeral: true });
+        const L = I18N[pickLocale(interaction)];
+        if (ACTIVE_EVENT) {
+          const rankSource = ACTIVE_EVENT?.rankSource || (config?.eventLeaderboardSource) || 'panel';
+          if (rankSource === 'panel') {
+            const now = new Date();
+            const period = ACTIVE_EVENT?.rankPeriod || 'weekly';
+            let startMs, endMs;
+            if (period === 'daily') { startMs = startOfDay(now); endMs = endOfDay(now); }
+            else if (period === 'monthly') { startMs = startOfMonth(now); endMs = endOfMonth(now); }
+            else { startMs = startOfWeek(now); endMs = endOfWeek(now); }
+            const onlineSessions = getOnlineSessionsBetween(member.id, startMs, endMs);
+            const statusSessions = getStatusSessionsBetween(member.id, startMs, endMs);
+            const onlineTotal = sumOverlap(onlineSessions, startMs, endMs);
+            const desired = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+            const without = Math.max(0, onlineTotal - desired);
+            const locale = pickLocale(interaction);
+            const periodKey = (period === 'daily') ? (locale==='tr'?'Bugün':'Today') : (period === 'monthly') ? (locale==='tr'?'Bu Ay':'This Month') : (locale==='tr'?'Bu Hafta':'This Week');
+            const lines = [
+              `${L.user_label}: <@${member.id}>`,
+              `${periodKey}: 🟢 ${L.with_status}: ${formatDuration(desired)} • ⚪ ${L.without_status}: ${formatDuration(without)}`
+            ];
+            return interaction.reply({ content: lines.join("\n"), ephemeral: true });
+          } else {
+            const startMs = ACTIVE_EVENT.startMs;
+            const endMs = ACTIVE_EVENT.endMs || Date.now();
+            const onlineSessions = getOnlineSessionsBetween(member.id, startMs, endMs);
+            const statusSessions = getStatusSessionsBetween(member.id, startMs, endMs);
+            const onlineTotal = sumOverlap(onlineSessions, startMs, endMs);
+            const desired = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+            const without = Math.max(0, onlineTotal - desired);
+            const locale = pickLocale(interaction);
+            const eventLabel = (locale === 'tr') ? 'Etkinlik' : 'Event';
+            const lines = [
+              `${L.user_label}: <@${member.id}>`,
+              `${eventLabel}: 🟢 ${L.with_status}: ${formatDuration(desired)} • ⚪ ${L.without_status}: ${formatDuration(without)}`
+            ];
+            return interaction.reply({ content: lines.join("\n"), ephemeral: true });
+          }
+        }
+
+        const now = new Date();
+        const dStart = startOfDay(now), dEnd = endOfDay(now);
+        const wStart = startOfWeek(now), wEnd = endOfWeek(now);
+        const mStart = startOfMonth(now), mEnd = endOfMonth(now);
+
+        const dOnlineSessions = getOnlineSessionsBetween(member.id, dStart, dEnd);
+        const dStatusSessions = getStatusSessionsBetween(member.id, dStart, dEnd);
+        const dOnlineTotal = sumOverlap(dOnlineSessions, dStart, dEnd);
+        const dDesired = sumIntersection(dOnlineSessions, dStatusSessions, dStart, dEnd);
+        const dWithout = Math.max(0, dOnlineTotal - dDesired);
+
+        const wOnlineSessions = getOnlineSessionsBetween(member.id, wStart, wEnd);
+        const wStatusSessions = getStatusSessionsBetween(member.id, wStart, wEnd);
+        const wOnlineTotal = sumOverlap(wOnlineSessions, wStart, wEnd);
+        const wDesired = sumIntersection(wOnlineSessions, wStatusSessions, wStart, wEnd);
+        const wWithout = Math.max(0, wOnlineTotal - wDesired);
+
+        const mOnlineSessions = getOnlineSessionsBetween(member.id, mStart, mEnd);
+        const mStatusSessions = getStatusSessionsBetween(member.id, mStart, mEnd);
+        const mOnlineTotal = sumOverlap(mOnlineSessions, mStart, mEnd);
+        const mDesired = sumIntersection(mOnlineSessions, mStatusSessions, mStart, mEnd);
+        const mWithout = Math.max(0, mOnlineTotal - mDesired);
+
+        const lines = [
+          `${L.user_label}: <@${member.id}>`,
+          `${L.today}: 🟢 ${L.with_status}: ${formatDuration(dDesired)} • ⚪ ${L.without_status}: ${formatDuration(dWithout)}`,
+          `${L.this_week}: 🟢 ${L.with_status}: ${formatDuration(wDesired)} • ⚪ ${L.without_status}: ${formatDuration(wWithout)}`,
+          `${L.this_month}: 🟢 ${L.with_status}: ${formatDuration(mDesired)} • ⚪ ${L.without_status}: ${formatDuration(mWithout)}`
+        ];
+        return interaction.reply({ content: lines.join("\n"), ephemeral: true });
+      }
+    } catch (e) {
+      console.error("button interaction error:", e);
+      try { return interaction.reply({ content: "An error occurred.", ephemeral: true }); } catch {}
+    }
+    return; 
+  }
+
   if (!interaction.isChatInputCommand()) return;
   const { commandName } = interaction;
 
@@ -788,6 +1401,27 @@ client.on("interactionCreate", async (interaction) => {
       if (!member) {
         return interaction.reply({ content: "Member not found.", ephemeral: true });
       }
+      if (!isWatchedMember(member)) {
+        return interaction.reply({ content: "Only watched members can use this command.", ephemeral: true });
+      }
+      const L = I18N[pickLocale(interaction)];
+      if (ACTIVE_EVENT) {
+        const startMs = ACTIVE_EVENT.startMs;
+        const endMs = ACTIVE_EVENT.endMs || Date.now();
+        const onlineSessions = getOnlineSessionsBetween(member.id, startMs, endMs);
+        const statusSessions = getStatusSessionsBetween(member.id, startMs, endMs);
+        const onlineTotal = sumOverlap(onlineSessions, startMs, endMs);
+        const desired = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
+        const without = Math.max(0, onlineTotal - desired);
+        const locale = pickLocale(interaction);
+        const eventLabel = (locale === 'tr') ? 'Etkinlik' : 'Event';
+        const lines = [
+          `${L.user_label}: <@${member.id}>`,
+          `${eventLabel}: 🟢 ${L.with_status}: ${formatDuration(desired)} • ⚪ ${L.without_status}: ${formatDuration(without)}`
+        ];
+        return interaction.reply({ content: lines.join("\n"), ephemeral: true });
+      }
+
       const now = new Date();
       const dStart = startOfDay(now), dEnd = endOfDay(now);
       const wStart = startOfWeek(now), wEnd = endOfWeek(now);
@@ -811,7 +1445,6 @@ client.on("interactionCreate", async (interaction) => {
       const mDesired = sumIntersection(mOnlineSessions, mStatusSessions, mStart, mEnd);
       const mWithout = Math.max(0, mOnlineTotal - mDesired);
 
-      const L = I18N[pickLocale(interaction)];
       const lines = [
         `${L.user_label}: <@${member.id}>`,
         `${L.today}: 🟢 ${L.with_status}: ${formatDuration(dDesired)} • ⚪ ${L.without_status}: ${formatDuration(dWithout)}`,
@@ -827,6 +1460,9 @@ client.on("interactionCreate", async (interaction) => {
 
   if (commandName === "leader") {
     try {
+      if (!isAuthorized(interaction)) {
+        return interaction.reply({ content: "Unauthorized.", ephemeral: true });
+      }
       const period = (interaction.options.getString("period") || "weekly").toLowerCase();
       const metricReq = (interaction.options.getString("metric") || "desired_online").toLowerCase();
       const metric = ["online", "desired_online"].includes(metricReq) ? metricReq : "desired_online";
@@ -878,8 +1514,8 @@ client.on("interactionCreate", async (interaction) => {
           const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
           const rankLabel = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
           const fields = top.map((r, i) => ({
-            name: `${rankLabel(i)} ${r.name}`,
-            value: `🟢 ${L.with_status}: ${formatDuration(r.desired_online_ms)} • ⚪ ${L.without_status}: ${formatDuration(r.online_without_status_ms)}`,
+            name: `${rankLabel(i)} ${r.name} — ${formatHMS(r.desired_online_ms)}`,
+            value: "\u200B",
             inline: true
           }));
           const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
@@ -910,12 +1546,10 @@ client.on("interactionCreate", async (interaction) => {
           const onlineSessions = getOnlineSessionsBetween(r.user_id, startMs, endMs);
           const statusSessions = getStatusSessionsBetween(r.user_id, startMs, endMs);
           const desiredOnlineMs = sumIntersection(onlineSessions, statusSessions, startMs, endMs);
-          const onlineTotalMs = r.online_ms || sumOverlap(onlineSessions, startMs, endMs);
-          const onlineWithoutStatusMs = Math.max(0, onlineTotalMs - desiredOnlineMs);
           const rankLabel = (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
           return {
-            name: `${rankLabel} ${name}`,
-            value: `🟢 ${L.with_status}: ${formatDuration(desiredOnlineMs)} • ⚪ ${L.without_status}: ${formatDuration(onlineWithoutStatusMs)}`,
+            name: `${rankLabel} ${name} — ${formatHMS(desiredOnlineMs)}`,
+            value: "\u200B",
             inline: true
           };
         }));
@@ -954,8 +1588,8 @@ client.on("interactionCreate", async (interaction) => {
       const icon = typeof guild.iconURL === 'function' ? (guild.iconURL({ size: 128 }) || null) : null;
       const rankLabel = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
       const fields = top.map((r, i) => ({
-        name: `${rankLabel(i)} ${r.name}`,
-        value: `🟢 ${L.with_status}: ${formatDuration(r.desired_online_ms)} • ⚪ ${L.without_status}: ${formatDuration(r.online_without_status_ms)}`,
+        name: `${rankLabel(i)} ${r.name} — ${formatHMS(r.desired_online_ms)}`,
+        value: "\u200B",
         inline: true
       }));
       const rangeStr = `${formatTime(startMs)} – ${formatTime(endMs)}`;
@@ -976,7 +1610,7 @@ client.on("interactionCreate", async (interaction) => {
 
   if (!isAuthorized(interaction)) {
     return interaction.reply({
-      content: "This command is only available in the designated channel and for members with the admin role.",
+      content: "Unauthorized.",
       ephemeral: true
     });
   }
@@ -1085,6 +1719,140 @@ client.on("interactionCreate", async (interaction) => {
     ].join("\n");
 
     return interaction.reply({ content, ephemeral: true });
+  }
+
+  if (commandName === "event") {
+    if (!isAuthorized(interaction)) {
+      return interaction.reply({ content: "Unauthorized.", ephemeral: true });
+    }
+    const sub = interaction.options.getSubcommand();
+  if (sub === "start") {
+      try {
+        const statusText = interaction.options.getString("status_text", true);
+        const durationHours = interaction.options.getInteger("duration_hours") || null;
+        const channelObj = interaction.options.getChannel("channel") || null;
+        const limit = interaction.options.getInteger("limit") || 15;
+        const now = Date.now();
+        ACTIVE_EVENT = {
+          startMs: now,
+          endMs: durationHours ? now + (durationHours * 3600000) : null,
+          statusText,
+          channelId: channelObj ? channelObj.id : config.reportChannelId,
+          messageId: null,
+          limit,
+          milestones: {},
+          refreshHandle: null,
+          rankSource: (config?.eventLeaderboardSource) || 'panel',
+          rankPeriod: (config?.eventSeedPeriod) || "weekly",
+        };
+        try {
+          await guild.members.fetch({ withPresences: true });
+          const watchers = guild.members.cache.filter((m) => isWatchedMember(m));
+          watchers.forEach((m) => handleMemberSnapshot(m));
+        } catch (snapErr) {
+          console.error("Initial event snapshot error:", snapErr);
+        }
+        await ensureEventScoreboardMessage(guild);
+        await updateEventScoreboard(guild);
+        try { if (ACTIVE_EVENT.refreshHandle) clearInterval(ACTIVE_EVENT.refreshHandle); } catch {}
+        const refreshSeconds = Math.max(2, Number((config?.eventRefreshSeconds) || 10));
+        ACTIVE_EVENT.refreshHandle = setInterval(async () => {
+          try {
+            if (ACTIVE_EVENT?.endMs && Date.now() > ACTIVE_EVENT.endMs) {
+              clearInterval(ACTIVE_EVENT.refreshHandle);
+              ACTIVE_EVENT.refreshHandle = null;
+            }
+            await updateEventScoreboard(guild);
+          } catch (e) { console.error("Event refresh error:", e); }
+        }, refreshSeconds * 1000);
+        const hourLabel = durationHours === 1 ? "hour" : "hours";
+        return interaction.reply({ content: `Event started. Status: "${statusText}"${durationHours ? ` • Duration: ${durationHours} ${hourLabel}` : ""}.`, ephemeral: true });
+      } catch (e) {
+        console.error("event start error:", e);
+        return interaction.reply({ content: "Error: Failed to start the event.", ephemeral: true });
+      }
+    } else if (sub === "stop") {
+      try {
+        if (!ACTIVE_EVENT) {
+          return interaction.reply({ content: "No active event.", ephemeral: true });
+        }
+        try { if (ACTIVE_EVENT.refreshHandle) clearInterval(ACTIVE_EVENT.refreshHandle); } catch {}
+        const ended = ACTIVE_EVENT;
+        ACTIVE_EVENT = null;
+        const channelId = ended.channelId || config.reportChannelId;
+        const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
+        if (channel && ended.messageId) {
+          const message = await channel.messages.fetch(ended.messageId).catch(() => null);
+          if (message) {
+            const L = I18N[pickLocale(guild)];
+            const rangeStr = `${formatTime(ended.startMs)} – ${formatTime(ended.endMs ?? Date.now())}`;
+            const embed = message.embeds?.[0] ? EmbedBuilder.from(message.embeds[0]) : new EmbedBuilder();
+            embed.setFooter({ text: `${L.guild_footer_prefix}: ${guild.name} • ${rangeStr} • (Ended)` }).setTimestamp(Date.now());
+            await message.edit({ embeds: [embed] });
+          }
+        }
+        return interaction.reply({ content: "Event stopped.", ephemeral: true });
+      } catch (e) {
+        console.error("event stop error:", e);
+        return interaction.reply({ content: "Error: Failed to stop the event.", ephemeral: true });
+      }
+    } else if (sub === "export") {
+      try {
+        if (!ACTIVE_EVENT) {
+          return interaction.reply({ content: "No active event.", ephemeral: true });
+        }
+        const now = Date.now();
+        const startMs = ACTIVE_EVENT.startMs;
+        const endMs = ACTIVE_EVENT.endMs ?? now;
+        const limit = ACTIVE_EVENT.limit || 15;
+        const rankSource = ACTIVE_EVENT?.rankSource || (config?.eventLeaderboardSource) || 'panel';
+        const period = ACTIVE_EVENT?.rankPeriod || (config?.eventSeedPeriod) || 'weekly';
+        const rows = rankSource === 'panel'
+          ? await computePeriodDesiredRank(guild, period, limit)
+          : await computeEventRanking(guild, startMs, endMs, limit);
+        const header = ["user_id","username","desired_online_ms","online_without_status_ms","total_online_ms"]; 
+        const lines = [header.join(",")].concat(rows.map(r => {
+          const total = (typeof r.total_online_ms === 'number')
+            ? r.total_online_ms
+            : ((r.desired_online_ms || 0) + (r.online_without_status_ms || 0));
+          return [r.user_id, (r.name || '').replace(/,/g, " "), r.desired_online_ms, r.online_without_status_ms, total].join(",");
+        }));
+        const csv = lines.join("\n");
+        const buf = Buffer.from(csv, 'utf8');
+        const file = new AttachmentBuilder(buf, { name: `event_${formatDate(now)}.csv` });
+        return interaction.reply({ content: "CSV ready.", files: [file], ephemeral: true });
+      } catch (e) {
+        console.error("event export error:", e);
+        return interaction.reply({ content: "Error: Failed to generate CSV.", ephemeral: true });
+      }
+    }
+  }
+
+  if (commandName === "reward") {
+    if (!isAuthorized(interaction)) {
+      return interaction.reply({ content: "Unauthorized.", ephemeral: true });
+    }
+    try {
+      if (!ACTIVE_EVENT) {
+        return interaction.reply({ content: "No active event.", ephemeral: true });
+      }
+      const role = interaction.options.getRole("role", true);
+      const limit = interaction.options.getInteger("limit") || 3;
+      const now = Date.now();
+      const startMs = ACTIVE_EVENT.startMs;
+      const endMs = ACTIVE_EVENT.endMs ?? now;
+      const rows = await computeEventRanking(guild, startMs, endMs, limit);
+      const granted = [];
+      for (const r of rows) {
+        const m = await guild.members.fetch(r.user_id).catch(() => null);
+        if (!m) continue;
+        try { await m.roles.add(role.id); granted.push(`<@${r.user_id}>`); } catch (e) { console.error("role add error:", e); }
+      }
+      return interaction.reply({ content: `Roles granted (${role.name}): ${granted.join(", ")}`, ephemeral: true });
+    } catch (e) {
+      console.error("reward error:", e);
+      return interaction.reply({ content: "Error: Failed to assign roles.", ephemeral: true });
+    }
   }
 });
 
